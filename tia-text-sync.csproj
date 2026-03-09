@@ -1,0 +1,23 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <RootNamespace>tia_text_sync</RootNamespace>
+    <PlatformTarget>x64</PlatformTarget>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="Siemens.Engineering">
+      <HintPath>.\libs\V17\Siemens.Engineering.dll</HintPath>
+    </Reference>
+
+    <Reference Include="Siemens.Engineering.Hmi">
+      <HintPath>.\libs\V17\Siemens.Engineering.Hmi.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+</Project>
