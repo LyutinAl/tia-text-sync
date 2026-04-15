@@ -19,30 +19,38 @@
 | Этап | Описание | Статус |
 | ---- | -------- | ------ |
 | 1 | Запуск TIA Portal / подключение к работающему процессу | ✅ Done |
-| 2 | Открытие проекта, получение списка блоков с метаданными | ✅ Done |
-| 3 | Экспорт блоков: SCL → `src/`, LAD/FBD → `xml/`, теги → `tags/` | ✅ Done |
+| 2 | Открытие проекта, отображение дерева устройств и блоков | ✅ Done |
+| 3 | Экспорт блоков: SCL/AWL → `src/`, LAD/FBD → `xml/`, теги → `tags/` | ✅ Done |
 | 4 | Нормализация XML (удаление нестабильных полей, стабильный diff) | ✅ Done |
-| 5 | CLI с параметрами `--project`, `--output`, `--help` | ✅ Done |
-| 6 | Экспорт HW-конфигурации устройств → `hw/` | 🔄 In progress |
+| 5 | Экспорт HW-конфигурации устройств → `hw.xml` | ✅ Done |
+| 6 | WinForms GUI: подключение, дерево проекта, выбор рабочей папки, экспорт | ✅ Done |
 | 7 | Импорт: `src/` → `GenerateBlocksFromSource`, `xml/` → `ImportBlock`, `tags/` → `ImportTagTable` | 📋 Planned |
-| 8 | GUI (WinForms) для удобного запуска экспорта/импорта | 📋 Planned |
+| 8 | Сравнение изменений между рабочей папкой и TIA Portal | 📋 Planned |
+
+## Рабочая папка (workspace)
+
+Приложение привязывается к корневой папке Git-репозитория:
+
+- Путь сохраняется между запусками (`%AppData%\TiaTextSync\workspace.txt`)
+- Экспорт записывает файлы напрямую в рабочую папку — без лишних диалогов
+- В будущем: импорт читает изменения из этой же папки
 
 ## Структура экспорта
 
 ```text
-<outputDir>/
-  hw/                     # HW-конфигурация устройств (XML, diff-only)
-    CPU_1516.xml
-    ET200SP_left.xml
-  <PlcName>/              # По одной папке на каждый ПЛК в проекте
-    src/                  # ST-источник: FB/FC/OB (SCL), DB, UDT — полный round-trip
-      Motor_FB.scl
-      Motor_DB.scl
-      MotorType.scl
-    tags/                 # Таблицы тегов в CSV — полный round-trip
-      Main_Tags.csv
-    xml/                  # LAD/FBD/AWL блоки (нет ST-представления) — round-trip через XML
-      Conveyor_LAD.xml
+<workspace>/                    ← корень Git-репозитория
+  <DeviceName>/                 ← устройство (символы "/" в имени заменяются)
+    hw.xml                      ← снимок HW-конфигурации (только для git diff)
+    <PlcName>/
+      src/                      ← блоки и UDT с ST-исходником — полный round-trip
+        Motor_FB.scl
+        Motor_DB.scl
+        MotorType.scl
+        Conveyor.awl            ← STL-блоки экспортируются как .awl
+      tags/                     ← таблицы тегов в CSV — полный round-trip
+        Main_Tags.csv
+      xml/                      ← LAD/FBD блоки без ST-представления — round-trip через XML
+        Conveyor_LAD.xml
 ```
 
 ## Round-trip
@@ -53,13 +61,13 @@
 Изменения в Git → tia-text-sync import → TIA Portal
 ```
 
-Папка `hw/` — только для отслеживания изменений в Git; применяется вручную через TIA Portal GUI.
+Файл `hw.xml` — только для отслеживания изменений в Git; применяется вручную через TIA Portal GUI.
 
 ## Ограничения
 
 - Работает только на машине с установленным TIA Portal (Windows, x64)
 - Требует членства пользователя в группе `Siemens TIA Openness`
-- Прототип использует API версии V17 (совместимо с TIA Portal V17 и выше)
+- Использует API версии V17 (совместимо с TIA Portal V17 и выше)
 - HW-конфигурация экспортируется для diff, но автоматический импорт не поддерживается
 
 ## Что НЕ входит в scope (сейчас)

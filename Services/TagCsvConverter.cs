@@ -3,22 +3,20 @@ using System.Linq;
 using System.Text;
 using System.Xml.Linq;
 
-namespace TiaTextSync;
+namespace TiaTextSync.Services;
 
 /// <summary>
-/// Конвертирует TIA ML XML экспорт тег-таблицы в CSV-формат,
-/// совместимый с нативным импортом TIA Portal (File → Import Tags).
+/// Конвертирует экспорт таблицы тегов из формата TIA ML XML в CSV,
+/// совместимый с нативным импортом тегов TIA Portal (Файл → Импорт тегов).
 /// </summary>
 internal static class TagCsvConverter
 {
     public static void Convert(string xmlPath, string csvPath)
     {
         var doc = XDocument.Load(xmlPath);
-
-        var sb = new StringBuilder();
+        var sb  = new StringBuilder();
         sb.AppendLine("Name,Data Type,Logical Address,Comment");
 
-        // TIA ML оборачивает теги в SW.Tags.PlcTag независимо от версии
         var tags = doc.Descendants()
             .Where(e => e.Name.LocalName == "SW.Tags.PlcTag");
 
@@ -42,17 +40,17 @@ internal static class TagCsvConverter
 
     private static string GetAttr(XElement parent, string localName) =>
         parent.Elements()
-            .FirstOrDefault(e => e.Name.LocalName == localName)?.Value ?? string.Empty;
+              .FirstOrDefault(e => e.Name.LocalName == localName)?.Value ?? string.Empty;
 
     private static string GetComment(XElement attrs)
     {
-        // <Comment><MultiLanguageText Lang="en-US">...</MultiLanguageText></Comment>
+        // <Comment><MultiLanguageText Lang="ru-RU">…</MultiLanguageText></Comment>
         var commentEl = attrs.Elements()
             .FirstOrDefault(e => e.Name.LocalName == "Comment");
 
         return commentEl?.Descendants()
-            .FirstOrDefault(e => e.Name.LocalName == "MultiLanguageText")?.Value
-            ?? string.Empty;
+                         .FirstOrDefault(e => e.Name.LocalName == "MultiLanguageText")?.Value
+               ?? string.Empty;
     }
 
     private static string Escape(string value)

@@ -5,30 +5,39 @@ using Siemens.Engineering.SW.ExternalSources;
 using Siemens.Engineering.SW.Tags;
 using Siemens.Engineering.SW.Types;
 using System;
-using System.Collections.Generic;
 using System.IO;
 
-namespace TiaTextSync;
+namespace TiaTextSync.Services;
 
 /// <summary>
-/// Экспортирует содержимое ПЛК в файловую структуру, пригодную для Git.
+/// Экспортирует содержимое ПЛК (блоки, таблицы тегов, UDT) в структуру папок для Git.
 ///
 /// Структура вывода:
-///   &lt;outputDir&gt;/&lt;PlcName&gt;/src/   — блоки и типы с ST-представлением (.scl)
-///   &lt;outputDir&gt;/&lt;PlcName&gt;/xml/   — блоки без ST-представления (LAD/FBD/AWL)
-///   &lt;outputDir&gt;/&lt;PlcName&gt;/tags/  — тег-таблицы (.csv)
+///   &lt;deviceDir&gt;/&lt;PlcName&gt;/src/   — блоки и UDT с ST-исходником (.scl / .awl)
+///   &lt;deviceDir&gt;/&lt;PlcName&gt;/xml/   — блоки LAD/FBD без ST-исходника (.xml)
+///   &lt;deviceDir&gt;/&lt;PlcName&gt;/tags/  — таблицы тегов (.csv)
+///
+/// Должен выполняться на потоке <see cref="TiaTextSync.Core.StaWorker"/>.
 /// </summary>
 internal sealed class ExportService
 {
-    private readonly PlcSoftware _plc;
-    private readonly string _outputDir;
+    private readonly PlcSoftware       _plc;
     private readonly IProgress<string> _progress;
+
+    // Пути папок кешируются в конструкторе — одинаковы для всех файлов одного ПЛК
+    private readonly string _srcDir;
+    private readonly string _xmlDir;
+    private readonly string _tagsDir;
 
     public ExportService(PlcSoftware plc, string outputDir, IProgress<string> progress)
     {
-        _plc = plc;
-        _outputDir = Path.GetFullPath(outputDir); // Openness требует абсолютные пути
+        _plc      = plc;
         _progress = progress;
+
+        var root  = Path.Combine(Path.GetFullPath(outputDir), plc.Name);  // Openness требует абсолютные пути
+        _srcDir   = Directory.CreateDirectory(Path.Combine(root, "src")).FullName;
+        _xmlDir   = Directory.CreateDirectory(Path.Combine(root, "xml")).FullName;
+        _tagsDir  = Directory.CreateDirectory(Path.Combine(root, "tags")).FullName;
     }
 
     public void Export()
@@ -55,7 +64,7 @@ internal sealed class ExportService
         try
         {
             if (block is IGenerateSource src)
-                ExportBlockAsSt(block, src);
+                ExportBlockAsSrc(block, src);
             else
                 ExportBlockAsXml(block);
         }
@@ -65,10 +74,10 @@ internal sealed class ExportService
         }
     }
 
-    private void ExportBlockAsSt(PlcBlock block, IGenerateSource src)
+    private void ExportBlockAsSrc(PlcBlock block, IGenerateSource src)
     {
         var dir = SrcDir();
-        // STL-блоки требуют расширение .awl — TIA Portal отклонит .scl
+        // STL-блоки требуют расширение .awl — TIA Portal отклоняет .scl для STL
         var ext  = block.ProgrammingLanguage == ProgrammingLanguage.STL ? "awl" : "scl";
         var file = new FileInfo(Path.Combine(dir, $"{block.Name}.{ext}"));
         _plc.ExternalSourceGroup.GenerateSource(new[] { src }, file);
@@ -77,14 +86,14 @@ internal sealed class ExportService
 
     private void ExportBlockAsXml(PlcBlock block)
     {
-        var dir = XmlDir();
+        var dir  = XmlDir();
         var path = Path.Combine(dir, $"{block.Name}.xml");
         block.Export(new FileInfo(path), ExportOptions.None);
         XmlNormalizer.Normalize(path);
         _progress.Report($"  XML  {_plc.Name}/xml/{block.Name}.xml");
     }
 
-    // ── Тег-таблицы ──────────────────────────────────────────────────────────
+    // ── Таблицы тегов ────────────────────────────────────────────────────────
 
     private void ExportTagTableGroup(PlcTagTableGroup group)
     {
@@ -99,13 +108,13 @@ internal sealed class ExportService
     {
         try
         {
-            var dir = TagsDir();
+            var dir     = TagsDir();
             var xmlPath = Path.Combine(dir, $"{table.Name}.xml");
             var csvPath = Path.Combine(dir, $"{table.Name}.csv");
 
             table.Export(new FileInfo(xmlPath), ExportOptions.None);
             TagCsvConverter.Convert(xmlPath, csvPath);
-            File.Delete(xmlPath); // XML — промежуточный, оставляем только CSV
+            File.Delete(xmlPath);   // XML промежуточный — оставляем только CSV
 
             _progress.Report($"  CSV  {_plc.Name}/tags/{table.Name}.csv");
         }
@@ -115,7 +124,7 @@ internal sealed class ExportService
         }
     }
 
-    // ── UDT ──────────────────────────────────────────────────────────────────
+    // ── Пользовательские типы (UDT) ──────────────────────────────────────────
 
     private void ExportTypeGroup(PlcTypeGroup group)
     {
@@ -132,15 +141,13 @@ internal sealed class ExportService
         {
             if (type is IGenerateSource src)
             {
-                var dir = SrcDir();
-                var file = new FileInfo(Path.Combine(dir, $"{type.Name}.scl"));
+                var file = new FileInfo(Path.Combine(SrcDir(), $"{type.Name}.scl"));
                 _plc.ExternalSourceGroup.GenerateSource(new[] { src }, file);
                 _progress.Report($"  SCL  {_plc.Name}/src/{type.Name}.scl");
             }
             else
             {
-                var dir = XmlDir();
-                var path = Path.Combine(dir, $"{type.Name}.xml");
+                var path = Path.Combine(XmlDir(), $"{type.Name}.xml");
                 type.Export(new FileInfo(path), ExportOptions.None);
                 XmlNormalizer.Normalize(path);
                 _progress.Report($"  XML  {_plc.Name}/xml/{type.Name}.xml");
@@ -152,26 +159,7 @@ internal sealed class ExportService
         }
     }
 
-    // ── Вспомогательные ──────────────────────────────────────────────────────
-
-    private string SrcDir()
-    {
-        var dir = Path.Combine(_outputDir, _plc.Name, "src");
-        Directory.CreateDirectory(dir);
-        return dir;
-    }
-
-    private string XmlDir()
-    {
-        var dir = Path.Combine(_outputDir, _plc.Name, "xml");
-        Directory.CreateDirectory(dir);
-        return dir;
-    }
-
-    private string TagsDir()
-    {
-        var dir = Path.Combine(_outputDir, _plc.Name, "tags");
-        Directory.CreateDirectory(dir);
-        return dir;
-    }
+    private string SrcDir()  => _srcDir;
+    private string XmlDir()  => _xmlDir;
+    private string TagsDir() => _tagsDir;
 }
