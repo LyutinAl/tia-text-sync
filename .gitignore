@@ -2,3 +2,4 @@ libs/
 bin/
 obj/
 export/
+.claude/
