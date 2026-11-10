@@ -49,10 +49,14 @@
           Motor_DB.db           ← DB
           Conveyor.awl          ← STL
           Conveyor_LAD.xml      ← LAD, FBD, GRAPH, F-блоки
+          Conveyor_LAD.lad      ← текстовый вид LAD/FBD для чтения и diff, не импортируется
       tags/                     ← таблицы тегов в SimaticML XML, с группами проекта
         Main_Tags.xml
       types/                    ← UDT, с группами проекта
         MotorType.scl
+      tech/                     ← технологические объекты в SimaticML XML, с группами проекта
+        Axis_1.xml
+        PID_Compact_1.db        ← исходник DB, если TIA не поддерживает XML для объекта
 ```
 
 ## Round-trip

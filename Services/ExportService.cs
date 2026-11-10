@@ -3,10 +3,12 @@ using Siemens.Engineering.SW;
 using Siemens.Engineering.SW.Blocks;
 using Siemens.Engineering.SW.ExternalSources;
 using Siemens.Engineering.SW.Tags;
+using Siemens.Engineering.SW.TechnologicalObjects;
 using Siemens.Engineering.SW.Types;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using TiaTextSync.Core;
 
 namespace TiaTextSync.Services;
@@ -19,9 +21,11 @@ namespace TiaTextSync.Services;
 ///   &lt;deviceDir&gt;/&lt;PlcName&gt;/blocks/&lt;группы&gt;/ — блоки (.scl / .awl / .db / .xml)
 ///   &lt;deviceDir&gt;/&lt;PlcName&gt;/tags/&lt;группы&gt;/   — таблицы тегов в SimaticML (.xml)
 ///   &lt;deviceDir&gt;/&lt;PlcName&gt;/types/&lt;группы&gt;/  — UDT (.scl)
+///   &lt;deviceDir&gt;/&lt;PlcName&gt;/tech/&lt;группы&gt;/   — технологические объекты: SimaticML (.xml) или исходник DB (.db)
 ///
 /// Формат файла зависит от языка блока: SCL, STL и DB экспортируются исходником,
-/// остальные языки (LAD, FBD, GRAPH, F-блоки) — в XML.
+/// остальные языки (LAD, FBD, GRAPH, F-блоки) — в XML. Рядом с XML блока LAD/FBD создаётся
+/// текстовый вид (.lad / .fbd) для чтения и diff, импорт его не использует.
 ///
 /// Файлы сначала создаются во временной папке и только после успеха заменяют файлы
 /// в рабочей папке, поэтому сбой экспорта одного элемента не портит его прошлую версию.
@@ -31,17 +35,14 @@ namespace TiaTextSync.Services;
 /// </summary>
 internal sealed class ExportService
 {
-    // Удаляются только файлы форматов экспорта (.csv — таблицы тегов прежнего формата)
+    // Удаляются только файлы форматов экспорта (.csv и .to — прежние форматы тегов и технологических объектов)
     private static readonly HashSet<string> ManagedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".scl", ".awl", ".db", ".xml", ".csv"
+        ".scl", ".awl", ".db", ".xml", ".csv", ".lad", ".fbd", ".to"
     };
 
     // Папки прежней раскладки по языкам: очищаются при первом экспорте в новую структуру
     private static readonly string[] LegacyDirNames = { "src", "xml" };
-
-    // Как узел «System blocks» в дереве проекта TIA Portal
-    private const string SystemBlocksDirName = "System blocks";
 
     private readonly PlcSoftware       _plc;
     private readonly IProgress<string> _progress;
@@ -50,6 +51,7 @@ internal sealed class ExportService
     private readonly string _blocksDir;
     private readonly string _tagsDir;
     private readonly string _typesDir;
+    private readonly string _techDir;
     private readonly string _tempDir;
 
     private readonly HashSet<string> _writtenFiles = new(StringComparer.OrdinalIgnoreCase);
@@ -67,6 +69,7 @@ internal sealed class ExportService
         _blocksDir = Path.Combine(_root, "blocks");
         _tagsDir   = Path.Combine(_root, "tags");
         _typesDir  = Path.Combine(_root, "types");
+        _techDir   = Path.Combine(_root, "tech");
         _tempDir   = Path.Combine(Path.GetTempPath(), "TiaTextSync", Guid.NewGuid().ToString("N"));
     }
 
@@ -77,9 +80,10 @@ internal sealed class ExportService
         try
         {
             ExportBlockGroup(_plc.BlockGroup, _blocksDir);
-            ExportSystemBlockGroups(_plc.BlockGroup.SystemBlockGroups, Path.Combine(_blocksDir, SystemBlocksDirName));
+            ExportSystemBlockGroups(_plc.BlockGroup.SystemBlockGroups, _blocksDir);
             ExportTagTableGroup(_plc.TagTableGroup, _tagsDir);
             ExportTypeGroup(_plc.TypeGroup, _typesDir);
+            ExportTechnologicalObjectGroup(_plc.TechnologicalObjectGroup, _techDir);
 
             // Выполняется, только если все группы удалось перебрать:
             // при сбое обхода неполный список файлов не должен приводить к удалению.
@@ -102,7 +106,7 @@ internal sealed class ExportService
             ExportBlockGroup(sub, Path.Combine(dir, SafeName(sub.Name)));
     }
 
-    // Системные группы («Program resources» и др.) не входят в PlcBlockGroup.Groups
+    // Системные группы не входят в PlcBlockGroup.Groups. Верхняя группа уже называется «System blocks».
     private void ExportSystemBlockGroups(PlcSystemBlockGroupComposition groups, string dir)
     {
         foreach (PlcSystemBlockGroup group in groups)
@@ -152,6 +156,12 @@ internal sealed class ExportService
         block.Export(new FileInfo(tempPath), ExportOptions.None);
         XmlNormalizer.Normalize(tempPath);
         Publish(tempPath, dir, fileName, "XML");
+
+        // После Publish: сбой генерации текстового вида не должен мешать обновлению XML
+        if (BlockTextRenderer.Render(Path.Combine(dir, fileName)) is not { } view)
+            return;
+
+        PublishText(view.Text, dir, $"{SafeName(block.Name)}.{view.Extension}", view.Extension.ToUpperInvariant());
     }
 
     // ── Таблицы тегов ────────────────────────────────────────────────────────
@@ -205,6 +215,45 @@ internal sealed class ExportService
         }
     }
 
+    // ── Технологические объекты ──────────────────────────────────────────────
+
+    private void ExportTechnologicalObjectGroup(TechnologicalInstanceDBGroup group, string dir)
+    {
+        foreach (TechnologicalInstanceDB technologicalObject in group.TechnologicalObjects)
+            ExportTechnologicalObject(technologicalObject, dir);
+
+        foreach (TechnologicalInstanceDBUserGroup sub in group.Groups)
+            ExportTechnologicalObjectGroup(sub, Path.Combine(dir, SafeName(sub.Name)));
+    }
+
+    private void ExportTechnologicalObject(TechnologicalInstanceDB technologicalObject, string dir)
+    {
+        try
+        {
+            var name     = SafeName(technologicalObject.Name);
+            var tempPath = Path.Combine(_tempDir, $"{name}.xml");
+
+            try
+            {
+                technologicalObject.Export(new FileInfo(tempPath), ExportOptions.None);
+            }
+            catch (EngineeringTargetInvocationException ex)
+            {
+                // SimaticML поддерживается не для всех типов объектов, например не для PID_Compact на S7-1200
+                Logger.Warn($"ExportService: '{technologicalObject.Name}' не экспортируется в XML, выгружается исходник DB: {ex.Message}");
+                GenerateSourceFile(technologicalObject, dir, $"{name}.db", "TO");
+                return;
+            }
+
+            XmlNormalizer.Normalize(tempPath);
+            Publish(tempPath, dir, $"{name}.xml", "TO");
+        }
+        catch (Exception ex)
+        {
+            Warn(technologicalObject.Name, ex);
+        }
+    }
+
     // ── Запись файлов ────────────────────────────────────────────────────────
 
     private void GenerateSourceFile(IGenerateSource item, string dir, string fileName, string label)
@@ -212,6 +261,13 @@ internal sealed class ExportService
         var tempPath = Path.Combine(_tempDir, fileName);
         _plc.ExternalSourceGroup.GenerateSource(new[] { item }, new FileInfo(tempPath));
         Publish(tempPath, dir, fileName, label);
+    }
+
+    private void PublishText(string text, string targetDir, string fileName, string label)
+    {
+        var tempPath = Path.Combine(_tempDir, fileName);
+        File.WriteAllText(tempPath, text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        Publish(tempPath, targetDir, fileName, label);
     }
 
     private void Publish(string tempPath, string targetDir, string fileName, string label)
@@ -230,7 +286,7 @@ internal sealed class ExportService
     /// </summary>
     private void RemoveStaleFiles()
     {
-        var dirs = new List<string> { _blocksDir, _tagsDir, _typesDir };
+        var dirs = new List<string> { _blocksDir, _tagsDir, _typesDir, _techDir };
         foreach (var legacy in LegacyDirNames)
             dirs.Add(Path.Combine(_root, legacy));
 

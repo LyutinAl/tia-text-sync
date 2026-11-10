@@ -58,6 +58,7 @@ TiaTextSync/
     ExportService.cs     — экспорт блоков (SCL/AWL/DB/XML), тегов (XML), UDT
     HwExportService.cs   — снимок HW-конфигурации в XML (diff only)
     XmlNormalizer.cs     — удаление нестабильных полей из XML
+    BlockTextRenderer.cs — текстовый вид блоков LAD/FBD для чтения и diff
 
   UI/
     MainForm.cs          — главное окно WinForms
@@ -104,16 +105,19 @@ TiaTextSync/
 | `ExportBlockAsXml` | `PlcBlock.Export()` | `blocks/<группы>/` | `.xml` | ✅ `PlcBlockComposition.Import` |
 | `ExportTagTable` | `PlcTagTable.Export()` | `tags/<группы>/` | `.xml` | ✅ `PlcTagTableComposition.Import` |
 | `ExportType` | `IGenerateSource.GenerateSource()` | `types/<группы>/` | `.scl` | ✅ |
+| `ExportTechnologicalObject` | `TechnologicalInstanceDB.Export()` | `tech/<группы>/` | `.xml` | ✅ `TechnologicalInstanceDBComposition.Import` |
 
 Примечания:
 
 - Папки повторяют группы проекта TIA Portal. Символы, недопустимые в именах Windows, из имён удаляются.
+- Рядом с XML блока LAD/FBD создаётся текстовый вид `.lad` / `.fbd`: интерфейс и логика каждой сети в виде выражений. Он нужен только для чтения и diff, импорт его не использует.
+- Технологические объекты, для которых TIA Portal не поддерживает SimaticML (например, `PID_Compact` на S7-1200), выгружаются как исходник экземплярного DB `.db`. Список `Parameters` для них оказался пустым.
 - Системные блоки («Program resources» и др.) экспортируются в `blocks/System blocks/<группа>/`. Их обход идёт отдельно, через `PlcBlockSystemGroup.SystemBlockGroups`. При импорте эти блоки планируется пропускать.
 - Формат блока определяется по `ProgrammingLanguage`: `SCL`, `STL` и `DB` экспортируются исходником, все остальные языки (LAD, FBD, GRAPH, F-блоки) в XML. Проверка `is IGenerateSource` не подходит, потому что этот интерфейс реализован самим `PlcBlock`.
 - STL-блоки экспортируются с расширением `.awl`, а DB с расширением `.db`: для них TIA Portal отклоняет `.scl`.
 - Несогласованные (не скомпилированные) блоки TIA Portal не экспортирует, проект нужно предварительно скомпилировать.
 - Файлы создаются во временной папке и заменяют файлы в рабочей папке только после успешного экспорта.
-- После экспорта из `blocks/`, `tags/`, `types/` и папок прежней раскладки `src/`, `xml/` удаляются файлы `.scl`, `.awl`, `.db`, `.xml`, `.csv`, которых нет в ПЛК, а также опустевшие папки. Файлы элементов, экспорт которых завершился ошибкой, сохраняются.
+- После экспорта из `blocks/`, `tags/`, `types/`, `tech/` и папок прежней раскладки `src/`, `xml/` удаляются файлы `.scl`, `.awl`, `.db`, `.xml`, `.lad`, `.fbd`, `.csv`, которых нет в ПЛК, а также опустевшие папки. Файлы элементов, экспорт которых завершился ошибкой, сохраняются.
 
 ### HwExportService
 
@@ -127,7 +131,7 @@ TiaTextSync/
 
 ### XmlNormalizer
 
-Удаляет нестабильные поля из XML-экспорта: `Created`, `ModifiedDate`, `CreationDate`, `CompileDate`, `CodeModifiedDate`, `InterfaceModifiedDate`, `ParameterModified`, `StructureModified`. Делает `git diff` стабильным при повторном экспорте.
+Удаляет нестабильные поля из XML-экспорта: `Created`, `InstalledProducts`, `ModifiedDate`, `CreationDate`, `CompileDate`, `CodeModifiedDate`, `InterfaceModifiedDate`, `ParameterModified`, `StructureModified`. Делает `git diff` стабильным при повторном экспорте.
 
 ## Структура файлов в репозитории
 
@@ -141,10 +145,13 @@ TiaTextSync/
         <BlockName>.db          ← DB
         <BlockName>.awl         ← STL-блоки
         <BlockName>.xml         ← LAD/FBD/GRAPH и F-блоки
+        <BlockName>.lad         ← текстовый вид LAD (.fbd для FBD), только для чтения
       tags/<группы проекта>/
         <TableName>.xml         ← таблицы тегов (SimaticML)
       types/<группы проекта>/
         <TypeName>.scl          ← UDT
+      tech/<группы проекта>/
+        <ObjectName>.xml        ← технологические объекты (SimaticML)
 ```
 
 ## Технологический стек
