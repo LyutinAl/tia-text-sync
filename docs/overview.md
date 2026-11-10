@@ -47,8 +47,8 @@
         Motor_DB.db
         MotorType.scl
         Conveyor.awl            ← STL-блоки экспортируются как .awl
-      tags/                     ← таблицы тегов в CSV — полный round-trip
-        Main_Tags.csv
+      tags/                     ← таблицы тегов в SimaticML XML — полный round-trip
+        Main_Tags.xml
       xml/                      ← LAD/FBD блоки без ST-представления — round-trip через XML
         Conveyor_LAD.xml
 ```

@@ -55,10 +55,9 @@ TiaTextSync/
 
   Services/
     ProjectService.cs    — открытие проекта, перечисление устройств и ПЛК
-    ExportService.cs     — экспорт блоков (SCL/AWL/XML), тегов (CSV), UDT
+    ExportService.cs     — экспорт блоков (SCL/AWL/DB/XML), тегов (XML), UDT
     HwExportService.cs   — снимок HW-конфигурации в XML (diff only)
     XmlNormalizer.cs     — удаление нестабильных полей из XML
-    TagCsvConverter.cs   — конвертация TIA ML XML → TIA-native CSV
 
   UI/
     MainForm.cs          — главное окно WinForms
@@ -103,7 +102,7 @@ TiaTextSync/
 | ----- | -------- | ----- | ---------- | ---------- |
 | `ExportBlockAsSrc` | `IGenerateSource.GenerateSource()` | `src/` | `.scl` / `.awl` / `.db` | ✅ |
 | `ExportBlockAsXml` | `PlcBlock.Export()` | `xml/` | `.xml` | ✅ `ImportBlock` |
-| `ExportTagTable` | `PlcTagTable.Export()` → CSV | `tags/` | `.csv` | ✅ |
+| `ExportTagTable` | `PlcTagTable.Export()` | `tags/` | `.xml` | ✅ `PlcTagTableComposition.Import` |
 | `ExportType` | `IGenerateSource.GenerateSource()` | `src/` | `.scl` | ✅ |
 
 Примечания:
@@ -128,10 +127,6 @@ TiaTextSync/
 
 Удаляет нестабильные поля из XML-экспорта: `Created`, `ModifiedDate`, `CreationDate`, `CompileDate`, `CodeModifiedDate`, `InterfaceModifiedDate`, `ParameterModified`, `StructureModified`. Делает `git diff` стабильным при повторном экспорте.
 
-### TagCsvConverter
-
-Конвертирует Simatic ML XML-экспорт таблицы тегов в TIA-native CSV (`Name,Data Type,Logical Address,Comment`). Импортируется через `File → Import Tags`.
-
 ## Структура файлов в репозитории
 
 ```text
@@ -144,7 +139,7 @@ TiaTextSync/
         <BlockName>.db          ← DB
         <BlockName>.awl         ← STL-блоки
       tags/
-        <TableName>.csv         ← таблицы тегов
+        <TableName>.xml         ← таблицы тегов (SimaticML)
       xml/
         <BlockName>.xml         ← LAD/FBD/GRAPH и F-блоки
 ```

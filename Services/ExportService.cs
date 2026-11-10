@@ -17,7 +17,7 @@ namespace TiaTextSync.Services;
 /// Структура вывода:
 ///   &lt;deviceDir&gt;/&lt;PlcName&gt;/src/   — блоки SCL/STL, DB и UDT (.scl / .awl / .db)
 ///   &lt;deviceDir&gt;/&lt;PlcName&gt;/xml/   — блоки на остальных языках: LAD, FBD, GRAPH, F-блоки (.xml)
-///   &lt;deviceDir&gt;/&lt;PlcName&gt;/tags/  — таблицы тегов (.csv)
+///   &lt;deviceDir&gt;/&lt;PlcName&gt;/tags/  — таблицы тегов в SimaticML (.xml)
 ///
 /// Файлы сначала создаются во временной папке и только после успеха заменяют файлы
 /// в рабочей папке, поэтому сбой экспорта одного элемента не портит его прошлую версию.
@@ -27,7 +27,7 @@ namespace TiaTextSync.Services;
 /// </summary>
 internal sealed class ExportService
 {
-    // Удаляются только файлы, которые создаёт сам экспорт
+    // Удаляются только файлы форматов экспорта (.csv — таблицы тегов прежнего формата)
     private static readonly HashSet<string> ManagedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".scl", ".awl", ".db", ".xml", ".csv"
@@ -146,16 +146,14 @@ internal sealed class ExportService
     {
         try
         {
-            var fileName = $"{table.Name}.csv";
-            var xmlPath  = Path.Combine(_tempDir, $"{table.Name}.xml");
-            var csvPath  = Path.Combine(_tempDir, fileName);
+            var fileName = $"{table.Name}.xml";
+            var tempPath = Path.Combine(_tempDir, fileName);
 
-            table.Export(new FileInfo(xmlPath), ExportOptions.None);
-            TagCsvConverter.Convert(xmlPath, csvPath);
-            File.Delete(xmlPath);   // XML промежуточный — оставляем только CSV
-            Publish(csvPath, _tagsDir, fileName);
+            table.Export(new FileInfo(tempPath), ExportOptions.None);
+            XmlNormalizer.Normalize(tempPath);
+            Publish(tempPath, _tagsDir, fileName);
 
-            _progress.Report($"  CSV  {_plc.Name}/tags/{fileName}");
+            _progress.Report($"  TAG  {_plc.Name}/tags/{fileName}");
         }
         catch (Exception ex)
         {

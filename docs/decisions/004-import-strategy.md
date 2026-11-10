@@ -26,7 +26,7 @@ Round-trip делится на два класса элементов:
 | Класс | Элементы | Экспорт | Импорт |
 | ----- | -------- | ------- | ------ |
 | **Код** | FB, FC, OB (SCL), DB, UDT | `src/*.scl` | `GenerateBlocksFromSource` ✅ |
-| **Структура** | LAD/FBD/AWL блоки, Tag Tables | `xml/*.xml`, `tags/*.csv` | `ImportBlock`, `ImportTagTable` ✅ |
+| **Структура** | LAD/FBD/AWL блоки, Tag Tables | `xml/*.xml`, `tags/*.xml` | `PlcBlockComposition.Import`, `PlcTagTableComposition.Import` ✅ |
 | **Конфигурация** | HW Config, Profinet, IP, сеть | `hw/*.xml` | только вручную через TIA GUI ⚠️ |
 
 ## Workflow
@@ -57,7 +57,7 @@ repo/
     ET200SP_left.xml
   <PlcName>/             # По одному каталогу на каждый ПЛК в проекте
     src/                 # SCL-источник: блоки SCL, DB, UDT — полный round-trip
-    tags/                # Tag Tables CSV — полный round-trip
+    tags/                # Tag Tables SimaticML XML — полный round-trip
     xml/                 # LAD/FBD блоки — полный round-trip
 ```
 
