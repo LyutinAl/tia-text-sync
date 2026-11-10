@@ -51,6 +51,7 @@ TiaTextSync/
     TiaSession.cs        — подключение к TIA Portal / запуск нового процесса
     WorkspaceService.cs  — рабочая папка (Git-репозиторий), персистентность
     Logger.cs            — потокобезопасный файловый лог с временными метками
+    OpennessResolver.cs  — загрузка сборок Openness из установки TIA Portal V21
 
   Services/
     ProjectService.cs    — открытие проекта, перечисление устройств и ПЛК
@@ -100,12 +101,18 @@ TiaTextSync/
 
 | Метод | Источник | Папка | Расширение | Round-trip |
 | ----- | -------- | ----- | ---------- | ---------- |
-| `ExportBlockAsSrc` | `IGenerateSource.GenerateSource()` | `src/` | `.scl` / `.awl` | ✅ |
+| `ExportBlockAsSrc` | `IGenerateSource.GenerateSource()` | `src/` | `.scl` / `.awl` / `.db` | ✅ |
 | `ExportBlockAsXml` | `PlcBlock.Export()` | `xml/` | `.xml` | ✅ `ImportBlock` |
 | `ExportTagTable` | `PlcTagTable.Export()` → CSV | `tags/` | `.csv` | ✅ |
-| `ExportType` | `PlcType` (UDT) | `src/` или `xml/` | `.scl` / `.xml` | ✅ |
+| `ExportType` | `IGenerateSource.GenerateSource()` | `src/` | `.scl` | ✅ |
 
-Примечание: STL-блоки экспортируются с расширением `.awl` (TIA Portal отклоняет `.scl` для STL).
+Примечания:
+
+- Способ экспорта блока определяется по `ProgrammingLanguage`: `SCL`, `STL` и `DB` идут в `src/`, все остальные языки (LAD, FBD, GRAPH, F-блоки) в `xml/`. Проверка `is IGenerateSource` не подходит, потому что этот интерфейс реализован самим `PlcBlock`.
+- STL-блоки экспортируются с расширением `.awl`, а DB с расширением `.db`: для них TIA Portal отклоняет `.scl`.
+- Несогласованные (не скомпилированные) блоки TIA Portal не экспортирует, проект нужно предварительно скомпилировать.
+- Файлы создаются во временной папке и заменяют файлы в рабочей папке только после успешного экспорта.
+- После экспорта из `src/`, `xml/`, `tags/` удаляются файлы `.scl`, `.awl`, `.db`, `.xml`, `.csv`, которых нет в ПЛК. Файлы элементов, экспорт которых завершился ошибкой, сохраняются.
 
 ### HwExportService
 
@@ -119,7 +126,7 @@ TiaTextSync/
 
 ### XmlNormalizer
 
-Удаляет нестабильные поля из XML-экспорта: `ModifiedDate`, `CreationDate`, `CompileDate`, `CodeModifiedDate`, `InterfaceModifiedDate`, `ParameterModified`, `StructureModified`. Делает `git diff` стабильным при повторном экспорте.
+Удаляет нестабильные поля из XML-экспорта: `Created`, `ModifiedDate`, `CreationDate`, `CompileDate`, `CodeModifiedDate`, `InterfaceModifiedDate`, `ParameterModified`, `StructureModified`. Делает `git diff` стабильным при повторном экспорте.
 
 ### TagCsvConverter
 
@@ -133,12 +140,13 @@ TiaTextSync/
     hw.xml                      ← снимок HW-конфигурации (diff only)
     <PlcName>/
       src/
-        <BlockName>.scl         ← SCL/DB/UDT с ST-исходником
+        <BlockName>.scl         ← SCL-блоки и UDT
+        <BlockName>.db          ← DB
         <BlockName>.awl         ← STL-блоки
       tags/
         <TableName>.csv         ← таблицы тегов
       xml/
-        <BlockName>.xml         ← LAD/FBD блоки, UDT без ST
+        <BlockName>.xml         ← LAD/FBD/GRAPH и F-блоки
 ```
 
 ## Технологический стек
@@ -148,8 +156,8 @@ TiaTextSync/
 | Runtime | .NET Framework 4.8 | Требование Openness API |
 | Язык | C# (LangVersion latest) | Современный синтаксис: record, pattern matching, using var |
 | UI | WinForms | Встроен в .NET 4.8, минимальные зависимости |
-| API | Siemens TIA Openness V17 | Единственный официальный способ программного доступа |
-| DLL | V17 из установки TIA Portal V19 | Актуальная версия DLL со всеми исправлениями |
+| API | Siemens TIA Openness V21 | Единственный официальный способ программного доступа |
+| DLL | `Siemens.Engineering.Base` и `Step7` из `PublicAPI\V21\net48` | В V21 API разбит на отдельные сборки. Для компиляции берутся из `libs/V21`, при запуске загружаются из установки TIA Portal |
 | SCL | `.scl` / `.awl` | Расширения, генерируемые самим TIA Portal через `GenerateSource` |
 
 ## Ключевые ограничения платформы

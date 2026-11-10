@@ -19,7 +19,7 @@ TIA Portal сохраняет проекты в бинарном или XML-фо
 ### Требования
 
 - Windows 10/11 x64
-- Siemens TIA Portal V17
+- Siemens TIA Portal V21
 - .NET Framework 4.8
 - Пользователь должен состоять в группе **Siemens TIA Openness**
 

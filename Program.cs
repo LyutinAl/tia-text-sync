@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Windows.Forms;
 using TiaTextSync.Core;
 using TiaTextSync.UI;
@@ -14,6 +15,7 @@ internal static class Program
             "TiaTextSync", "logs", $"{DateTime.Now:yyyy-MM-dd}.log");
 
         Logger.Init(logPath);
+        OpennessResolver.Register();
 
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
@@ -26,7 +28,7 @@ internal static class Program
         try
         {
             Logger.Info("Запуск приложения");
-            Application.Run(new MainForm());
+            RunMainForm();
             Logger.Info("Приложение завершено");
         }
         catch (Exception ex)
@@ -39,4 +41,9 @@ internal static class Program
             Logger.Close();
         }
     }
+
+    // Отдельный метод: типы Siemens в MainForm не должны загружаться при JIT-компиляции Main,
+    // то есть раньше регистрации OpennessResolver.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void RunMainForm() => Application.Run(new MainForm());
 }

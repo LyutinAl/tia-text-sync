@@ -3,6 +3,7 @@ using Siemens.Engineering.HW;
 using System;
 using System.IO;
 using System.Xml.Linq;
+using TiaTextSync.Core;
 
 namespace TiaTextSync.Services;
 
@@ -24,6 +25,9 @@ internal sealed class HwExportService
     private readonly string            _deviceDir;
     private readonly IProgress<string> _progress;
 
+    /// <summary>Количество ошибок во время <see cref="Export"/>.</summary>
+    public int WarningCount { get; private set; }
+
     public HwExportService(Device device, string deviceDir, IProgress<string> progress)
     {
         _device    = device;
@@ -43,7 +47,9 @@ internal sealed class HwExportService
         }
         catch (Exception ex)
         {
+            WarningCount++;
             _progress.Report($"  WARN hw ({_device.Name}): {ex.Message}");
+            Logger.Error($"HwExportService: ошибка экспорта '{_device.Name}'", ex);
         }
     }
 

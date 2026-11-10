@@ -274,7 +274,7 @@ internal sealed class MainForm : Form
         using var dlg = new OpenFileDialog
         {
             Title  = "Открыть проект TIA Portal",
-            Filter = "TIA Portal Project|*.ap15;*.ap15_1;*.ap16;*.ap17;*.ap18;*.ap19|Все файлы|*.*"
+            Filter = "TIA Portal Project|*.ap15;*.ap15_1;*.ap16;*.ap17;*.ap18;*.ap19;*.ap20;*.ap21|Все файлы|*.*"
         };
         if (dlg.ShowDialog(this) != DialogResult.OK)
         {
@@ -332,6 +332,7 @@ internal sealed class MainForm : Form
 
         var boldFont = new Font(_tree.Font, FontStyle.Bold);
         var nodes    = await _sta.RunAsync(() => TreeBuilder.BuildDeviceNodes(_project, boldFont));
+        Info($"RefreshTreeAsync: устройств в дереве: {nodes.Count}");
 
         _tree.BeginUpdate();
         _tree.Nodes.Clear();
@@ -374,22 +375,35 @@ internal sealed class MainForm : Form
         {
             Info($"ExportDeviceAsync: папка вывода '{deviceDir}'");
 
-            await _sta.RunAsync(() =>
+            var warnings = await _sta.RunAsync(() =>
             {
+                var count = 0;
                 foreach (DeviceItem item in device.DeviceItems)
                     if (item.GetService<SoftwareContainer>()?.Software is PlcSoftware plc)
                     {
                         Info($"ExportDeviceAsync: экспорт PLC '{plc.Name}'");
-                        new ExportService(plc, deviceDir, log).Export();
+                        var export = new ExportService(plc, deviceDir, log);
+                        export.Export();
+                        count += export.WarningCount;
                     }
 
                 Info("ExportDeviceAsync: экспорт HW конфигурации");
-                new HwExportService(device, deviceDir, log).Export();
+                var hwExport = new HwExportService(device, deviceDir, log);
+                hwExport.Export();
+                return count + hwExport.WarningCount;
             });
 
-            Info($"ExportDeviceAsync: завершено '{deviceName}'");
-            Status($"Готово: {deviceName}");
-            Log($"Экспортировано в: {deviceDir}");
+            Info($"ExportDeviceAsync: завершено '{deviceName}', предупреждений: {warnings}");
+            if (warnings == 0)
+            {
+                Status($"Готово: {deviceName}");
+                Log($"Экспортировано в: {deviceDir}");
+            }
+            else
+            {
+                Status($"Готово с предупреждениями ({warnings}): {deviceName}");
+                Log($"Экспортировано в: {deviceDir}. Есть ошибки ({warnings}), проверьте строки WARN.");
+            }
         }
         catch (Exception ex)
         {

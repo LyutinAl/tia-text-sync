@@ -44,7 +44,7 @@
     <PlcName>/
       src/                      ← блоки и UDT с ST-исходником — полный round-trip
         Motor_FB.scl
-        Motor_DB.scl
+        Motor_DB.db
         MotorType.scl
         Conveyor.awl            ← STL-блоки экспортируются как .awl
       tags/                     ← таблицы тегов в CSV — полный round-trip
@@ -67,7 +67,7 @@
 
 - Работает только на машине с установленным TIA Portal (Windows, x64)
 - Требует членства пользователя в группе `Siemens TIA Openness`
-- Использует API версии V17 (совместимо с TIA Portal V17 и выше)
+- Использует API версии V21 и работает только с TIA Portal V21, установленным в папку по умолчанию
 - HW-конфигурация экспортируется для diff, но автоматический импорт не поддерживается
 
 ## Что НЕ входит в scope (сейчас)

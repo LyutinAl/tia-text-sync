@@ -8,6 +8,7 @@ using Siemens.Engineering.SW.Types;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
+using TiaTextSync.Services;
 
 namespace TiaTextSync.UI;
 
@@ -23,7 +24,7 @@ internal static class TreeBuilder
     {
         var result = new List<TreeNode>();
 
-        foreach (Device device in project.Devices)
+        foreach (var device in ProjectService.GetAllDevices(project))
         {
             var deviceNode = new TreeNode(device.Name) { Tag = device, NodeFont = boldFont };
 
