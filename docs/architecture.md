@@ -15,7 +15,7 @@
 │  (TIA-STA)    │      │  TreeView  ·  TextBox (лог)  ·  StatusStrip   │
 │               │      └──────────────────────────────────────────────┘
 │  TiaSession   │
-│  ProjectSvc   │──▶ ExportService ──▶ src/ xml/ tags/
+│  ProjectSvc   │──▶ ExportService ──▶ blocks/ tags/ types/
 │  TreeBuilder  │──▶ HwExportService ▶ hw.xml
 └───────────────┘
         │
@@ -100,18 +100,20 @@ TiaTextSync/
 
 | Метод | Источник | Папка | Расширение | Round-trip |
 | ----- | -------- | ----- | ---------- | ---------- |
-| `ExportBlockAsSrc` | `IGenerateSource.GenerateSource()` | `src/` | `.scl` / `.awl` / `.db` | ✅ |
-| `ExportBlockAsXml` | `PlcBlock.Export()` | `xml/` | `.xml` | ✅ `ImportBlock` |
-| `ExportTagTable` | `PlcTagTable.Export()` | `tags/` | `.xml` | ✅ `PlcTagTableComposition.Import` |
-| `ExportType` | `IGenerateSource.GenerateSource()` | `src/` | `.scl` | ✅ |
+| `ExportBlockAsSource` | `IGenerateSource.GenerateSource()` | `blocks/<группы>/` | `.scl` / `.awl` / `.db` | ✅ |
+| `ExportBlockAsXml` | `PlcBlock.Export()` | `blocks/<группы>/` | `.xml` | ✅ `PlcBlockComposition.Import` |
+| `ExportTagTable` | `PlcTagTable.Export()` | `tags/<группы>/` | `.xml` | ✅ `PlcTagTableComposition.Import` |
+| `ExportType` | `IGenerateSource.GenerateSource()` | `types/<группы>/` | `.scl` | ✅ |
 
 Примечания:
 
-- Способ экспорта блока определяется по `ProgrammingLanguage`: `SCL`, `STL` и `DB` идут в `src/`, все остальные языки (LAD, FBD, GRAPH, F-блоки) в `xml/`. Проверка `is IGenerateSource` не подходит, потому что этот интерфейс реализован самим `PlcBlock`.
+- Папки повторяют группы проекта TIA Portal. Символы, недопустимые в именах Windows, из имён удаляются.
+- Системные блоки («Program resources» и др.) экспортируются в `blocks/System blocks/<группа>/`. Их обход идёт отдельно, через `PlcBlockSystemGroup.SystemBlockGroups`. При импорте эти блоки планируется пропускать.
+- Формат блока определяется по `ProgrammingLanguage`: `SCL`, `STL` и `DB` экспортируются исходником, все остальные языки (LAD, FBD, GRAPH, F-блоки) в XML. Проверка `is IGenerateSource` не подходит, потому что этот интерфейс реализован самим `PlcBlock`.
 - STL-блоки экспортируются с расширением `.awl`, а DB с расширением `.db`: для них TIA Portal отклоняет `.scl`.
 - Несогласованные (не скомпилированные) блоки TIA Portal не экспортирует, проект нужно предварительно скомпилировать.
 - Файлы создаются во временной папке и заменяют файлы в рабочей папке только после успешного экспорта.
-- После экспорта из `src/`, `xml/`, `tags/` удаляются файлы `.scl`, `.awl`, `.db`, `.xml`, `.csv`, которых нет в ПЛК. Файлы элементов, экспорт которых завершился ошибкой, сохраняются.
+- После экспорта из `blocks/`, `tags/`, `types/` и папок прежней раскладки `src/`, `xml/` удаляются файлы `.scl`, `.awl`, `.db`, `.xml`, `.csv`, которых нет в ПЛК, а также опустевшие папки. Файлы элементов, экспорт которых завершился ошибкой, сохраняются.
 
 ### HwExportService
 
@@ -134,14 +136,15 @@ TiaTextSync/
   <SafeDeviceName>/             ← имя устройства (символы "/" заменены)
     hw.xml                      ← снимок HW-конфигурации (diff only)
     <PlcName>/
-      src/
-        <BlockName>.scl         ← SCL-блоки и UDT
+      blocks/<группы проекта>/
+        <BlockName>.scl         ← SCL-блоки
         <BlockName>.db          ← DB
         <BlockName>.awl         ← STL-блоки
-      tags/
-        <TableName>.xml         ← таблицы тегов (SimaticML)
-      xml/
         <BlockName>.xml         ← LAD/FBD/GRAPH и F-блоки
+      tags/<группы проекта>/
+        <TableName>.xml         ← таблицы тегов (SimaticML)
+      types/<группы проекта>/
+        <TypeName>.scl          ← UDT
 ```
 
 ## Технологический стек

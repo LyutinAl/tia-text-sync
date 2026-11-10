@@ -20,11 +20,11 @@
 | ---- | -------- | ------ |
 | 1 | Запуск TIA Portal / подключение к работающему процессу | ✅ Done |
 | 2 | Открытие проекта, отображение дерева устройств и блоков | ✅ Done |
-| 3 | Экспорт блоков: SCL/AWL → `src/`, LAD/FBD → `xml/`, теги → `tags/` | ✅ Done |
+| 3 | Экспорт по дереву проекта: блоки → `blocks/`, теги → `tags/`, UDT → `types/` | ✅ Done |
 | 4 | Нормализация XML (удаление нестабильных полей, стабильный diff) | ✅ Done |
 | 5 | Экспорт HW-конфигурации устройств → `hw.xml` | ✅ Done |
 | 6 | WinForms GUI: подключение, дерево проекта, выбор рабочей папки, экспорт | ✅ Done |
-| 7 | Импорт: `src/` → `GenerateBlocksFromSource`, `xml/` → `ImportBlock`, `tags/` → `ImportTagTable` | 📋 Planned |
+| 7 | Импорт: исходники → `GenerateBlocksFromSource`, XML-блоки → `PlcBlockComposition.Import`, `tags/` → `PlcTagTableComposition.Import` | 📋 Planned |
 | 8 | Сравнение изменений между рабочей папкой и TIA Portal | 📋 Planned |
 
 ## Рабочая папка (workspace)
@@ -42,20 +42,22 @@
   <DeviceName>/                 ← устройство (символы "/" в имени заменяются)
     hw.xml                      ← снимок HW-конфигурации (только для git diff)
     <PlcName>/
-      src/                      ← блоки и UDT с ST-исходником — полный round-trip
-        Motor_FB.scl
-        Motor_DB.db
-        MotorType.scl
-        Conveyor.awl            ← STL-блоки экспортируются как .awl
-      tags/                     ← таблицы тегов в SimaticML XML — полный round-trip
+      blocks/                   ← блоки, подпапки повторяют группы проекта TIA
+        Main.scl                ← SCL
+        Motors/
+          Motor_FB.scl
+          Motor_DB.db           ← DB
+          Conveyor.awl          ← STL
+          Conveyor_LAD.xml      ← LAD, FBD, GRAPH, F-блоки
+      tags/                     ← таблицы тегов в SimaticML XML, с группами проекта
         Main_Tags.xml
-      xml/                      ← LAD/FBD блоки без ST-представления — round-trip через XML
-        Conveyor_LAD.xml
+      types/                    ← UDT, с группами проекта
+        MotorType.scl
 ```
 
 ## Round-trip
 
-Обратная запись изменений в TIA Portal поддерживается для `src/`, `tags/`, `xml/`:
+Обратная запись изменений в TIA Portal планируется для `blocks/`, `tags/`, `types/`:
 
 ```text
 Изменения в Git → tia-text-sync import → TIA Portal
