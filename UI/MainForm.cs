@@ -95,6 +95,7 @@ internal sealed class MainForm : Form
     private readonly ToolStripDropDownButton _btnTools;
     private readonly ToolStripMenuItem       _itemRefresh;
     private readonly ToolStripMenuItem       _itemCompile;
+    private readonly ToolStripMenuItem       _itemArchive;
     private readonly ToolStripButton         _btnDisconnect;
 
     public MainForm()
@@ -134,12 +135,13 @@ internal sealed class MainForm : Form
         var itemExportSelection   = new ToolStripMenuItem("Выбранное в дереве");
         var itemExportDifferences = new ToolStripMenuItem("Отличия по последнему сравнению");
         var itemExportDevice      = new ToolStripMenuItem("Устройство целиком");
+        var itemExportArchive     = new ToolStripMenuItem("Архив проекта для Git LFS");
 
         _btnExport = new ToolStripSplitButton("Экспорт")
         {
             Enabled       = false,
             ToolTipText   = "Экспортировать выбранное в дереве: устройство, ПЛК, группу или элемент",
-            DropDownItems = { itemExportSelection, itemExportDifferences, itemExportDevice }
+            DropDownItems = { itemExportSelection, itemExportDifferences, itemExportDevice, new ToolStripSeparator(), itemExportArchive }
         };
 
         var itemImportSelection   = new ToolStripMenuItem("Выбранное в дереве");
@@ -161,8 +163,14 @@ internal sealed class MainForm : Form
             ToolTipText  = "Компилировать программу ПЛК перед экспортом и сравнением и после импорта. Изменяет состояние проекта в TIA"
         };
 
+        _itemArchive = new ToolStripMenuItem("Сохранять архив проекта при экспорте")
+        {
+            CheckOnClick = true,
+            ToolTipText  = "После экспорта сохранять архив проекта в корень рабочей папки для Git LFS"
+        };
+
         _btnTools = new ToolStripDropDownButton("Инструменты")
-            { DropDownItems = { _itemRefresh, _itemCompile } };
+            { DropDownItems = { _itemRefresh, _itemCompile, _itemArchive } };
         _btnTools.DropDown.ShowItemToolTips = true;
 
         _btnDisconnect = new ToolStripButton("Отключить") { Enabled = false };
@@ -228,6 +236,7 @@ internal sealed class MainForm : Form
         itemExportSelection.Click   += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await ExportAsync(Scope.Selection); });
         itemExportDifferences.Click += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await ExportAsync(Scope.Differences); });
         itemExportDevice.Click      += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await ExportAsync(Scope.Device); });
+        itemExportArchive.Click     += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await ArchiveAsync(); });
 
         _itemRefresh.Click     += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await RefreshAsync(); });
         _btnWorkspace.Click    += async (_, _) => { if (SelectWorkspace()) await RefreshTreeQuietlyAsync(); };
@@ -690,7 +699,8 @@ internal sealed class MainForm : Form
         var workspace = EnsureWorkspace();
         if (workspace is null) return;
 
-        var compile = _itemCompile.Checked;  // Читается здесь: контрол принадлежит UI-потоку
+        var compile = _itemCompile.Checked;  // Читается здесь: контролы принадлежат UI-потоку
+        var archive = _itemArchive.Checked;
         var compare = _compare;
         var log     = NewProgress();
 
@@ -759,16 +769,19 @@ internal sealed class MainForm : Form
             {
                 Log("Нет результатов сравнения. Сначала выполните «Сравнить».");
                 Status("Нет результатов сравнения");
+                return;
             }
-            else if (warnings == 0)
+
+            var archiveNote = !archive || await ArchiveCoreAsync(workspace, log) ? "" : ", архив не сохранён";
+            if (warnings == 0)
             {
                 Log($"Экспортировано элементов: {exported}. Папка: {workspace}");
-                Status($"Готово: элементов {exported}");
+                Status($"Готово: элементов {exported}{archiveNote}");
             }
             else
             {
                 Log($"Экспортировано элементов: {exported}. Есть ошибки ({warnings}), проверьте строки WARN.");
-                Status($"Готово с предупреждениями ({warnings})");
+                Status($"Готово с предупреждениями ({warnings}){archiveNote}");
             }
         }
         catch (Exception ex)
@@ -780,6 +793,41 @@ internal sealed class MainForm : Form
         finally { SetBusy(false); }
 
         await RefreshTreeQuietlyAsync();
+    }
+
+    private async Task ArchiveAsync()
+    {
+        var workspace = EnsureWorkspace();
+        if (workspace is null) return;
+
+        SetBusy(true);
+        try
+        {
+            Status(await ArchiveCoreAsync(workspace, NewProgress()) ? "Архив проекта сохранён" : "Архив проекта не сохранён");
+        }
+        finally { SetBusy(false); }
+    }
+
+    /// <summary>Сохраняет архив проекта в рабочую папку. Ошибку пишет в лог и возвращает false.</summary>
+    private async Task<bool> ArchiveCoreAsync(string workspace, IProgress<string> log)
+    {
+        var project = _project;
+        if (project is null) return false;
+
+        Status("Архивирование проекта...");
+        try
+        {
+            var path = await _sta.RunAsync(() => ArchiveService.Archive(project, workspace, log));
+            Info($"ArchiveCoreAsync: архив '{path}'");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Error("ArchiveCoreAsync: ошибка", ex);
+            Log($"Архив проекта не сохранён: {ex.Message}");
+            Log("Если в TIA есть несохранённые изменения, сохраните проект и повторите.");
+            return false;
+        }
     }
 
     private async Task ImportAsync(Scope scope)
