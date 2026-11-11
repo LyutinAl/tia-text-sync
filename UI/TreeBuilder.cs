@@ -20,7 +20,8 @@ namespace TiaTextSync.UI;
 ///
 /// У каждого узла <see cref="TreeNode.Name"/> хранит подпись без отметки статуса:
 /// по нему восстанавливаются раскрытые и выбранный узлы после перестроения дерева.
-/// Узлы элементов ПЛК хранят в <see cref="TreeNode.Tag"/> объект <see cref="PlcItem"/>.
+/// Узлы элементов ПЛК хранят в <see cref="TreeNode.Tag"/> объект <see cref="PlcItem"/>,
+/// узлы файлов, которых нет в TIA, — <see cref="WorkspaceItem"/>, узлы групп — имя папки.
 /// </summary>
 internal static class TreeBuilder
 {
@@ -28,6 +29,7 @@ internal static class TreeBuilder
     private static readonly Color NewColor     = Color.FromArgb(0, 130, 0);
     private static readonly Color PendingColor = Color.FromArgb(200, 110, 0);
     private static readonly Color FailedColor  = Color.FromArgb(190, 0, 0);
+    private static readonly Color MissingColor = Color.FromArgb(120, 120, 120);
 
     private static readonly (string Root, string Title)[] Sections =
     {
@@ -102,6 +104,9 @@ internal static class TreeBuilder
             foreach (var item in items.Where(i => i.Root == root))
                 AddItemNode(section, item, comparison);
 
+            foreach (var missing in comparison?.MissingInTia.Where(w => w.Root == root) ?? Enumerable.Empty<WorkspaceItem>())
+                AddMissingNode(section, missing);
+
             if (section.Nodes.Count == 0)
                 continue;
 
@@ -109,15 +114,9 @@ internal static class TreeBuilder
             plcNode.Nodes.Add(section);
         }
 
-        var notes = new List<string>();
         if (differences > 0)
-            notes.Add($"отличий: {differences}");
-        if (comparison?.MissingInTia > 0)
-            notes.Add($"нет в TIA: {comparison.MissingInTia}");
-
-        if (notes.Count > 0)
         {
-            plcNode.Text      = $"{plc.Name}  ({string.Join(", ", notes)})";
+            plcNode.Text      = $"{plc.Name}  (отличий: {differences})";
             plcNode.ForeColor = ChangedColor;
         }
 
@@ -129,21 +128,41 @@ internal static class TreeBuilder
         // Узлы групп создаются по пути элемента, порядок совпадает с деревом проекта TIA
         var parent = section;
         foreach (var group in item.Groups)
-        {
-            var name     = $"[{group}]";
-            var existing = parent.Nodes.Cast<TreeNode>().FirstOrDefault(n => n.Tag is null && n.Name == name);
-            if (existing is null)
-            {
-                existing = NewNode(name, null);
-                parent.Nodes.Add(existing);
-            }
-            parent = existing;
-        }
+            parent = GroupNode(parent, PathNames.SafeName(group), $"[{group}]");
 
         var node = NewNode(ItemLabel(item), item);
         if (comparison is not null && comparison.Items.TryGetValue(item.Key, out var status))
             ApplyStatus(node, status);
         parent.Nodes.Add(node);
+    }
+
+    /// <summary>Узел для файлов рабочей папки, которых нет в ПЛК. Его можно выбрать для импорта.</summary>
+    private static void AddMissingNode(TreeNode section, WorkspaceItem missing)
+    {
+        var parent = section;
+        foreach (var folder in missing.Groups)
+            parent = GroupNode(parent, folder, $"[{folder}]");
+
+        var node = NewNode(missing.Stem, missing);
+        node.Text      = $"{missing.Stem}  • нет в TIA";
+        node.ForeColor = MissingColor;
+        parent.Nodes.Add(node);
+    }
+
+    /// <summary>
+    /// Находит или создаёт узел группы. Узлы групп хранят в Tag имя папки:
+    /// по нему к группе проекта присоединяются файлы, которых нет в TIA.
+    /// </summary>
+    private static TreeNode GroupNode(TreeNode parent, string folder, string label)
+    {
+        var existing = parent.Nodes.Cast<TreeNode>()
+            .FirstOrDefault(n => n.Tag is string tag && string.Equals(tag, folder, System.StringComparison.OrdinalIgnoreCase));
+        if (existing is not null)
+            return existing;
+
+        var node = NewNode(label, folder);
+        parent.Nodes.Add(node);
+        return node;
     }
 
     private static string ItemLabel(PlcItem item) => item.Object switch
@@ -184,7 +203,7 @@ internal static class TreeBuilder
     /// <summary>Подписывает группы числом отмеченных элементов внутри и возвращает это число.</summary>
     private static int MarkGroups(TreeNode node)
     {
-        if (node.Tag is PlcItem)
+        if (node.Tag is PlcItem or WorkspaceItem)
             return node.ForeColor.IsEmpty ? 0 : 1;
 
         var count = node.Nodes.Cast<TreeNode>().Sum(MarkGroups);

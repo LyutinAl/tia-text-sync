@@ -3,6 +3,8 @@
 **Статус:** Принято
 **Дата:** 2026-03-09
 
+> **Обновление 2026-11-11:** импорт реализован в GUI, а не через CLI, описанный ниже. Кнопка «Импорт» загружает выбранную ветвь дерева, отличия по последнему сравнению или устройство целиком, после загрузки элементы сравниваются с рабочей папкой. Устройства лежат в `<Устройство>/`, HW-снимок в `<Устройство>/hw.xml`, а не в `hw/`. Подробности в `docs/architecture.md`, раздел ImportService.
+
 ## Контекст
 
 Элементы TIA-проекта делятся на две категории с точки зрения Openness API:
@@ -25,7 +27,7 @@ Round-trip делится на два класса элементов:
 
 | Класс | Элементы | Экспорт | Импорт |
 | ----- | -------- | ------- | ------ |
-| **Код** | FB, FC, OB (SCL, STL), DB, UDT | `blocks/**/*.scl`, `*.awl`, `*.db`, `types/**/*.scl` | `GenerateBlocksFromSource` ✅ |
+| **Код** | FB, FC, OB (SCL, STL), DB, UDT | `blocks/**/*.scl`, `*.awl`, `*.db`, `types/**/*.udt` | `GenerateBlocksFromSource` ✅ |
 | **Структура** | LAD/FBD блоки, Tag Tables | `blocks/**/*.xml`, `tags/**/*.xml` | `PlcBlockComposition.Import`, `PlcTagTableComposition.Import` ✅ |
 | **Конфигурация** | HW Config, Profinet, IP, сеть | `hw/*.xml` | только вручную через TIA GUI ⚠️ |
 

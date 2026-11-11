@@ -7,6 +7,7 @@ using System.Linq;
 using TiaTextSync.Core;
 using static TiaTextSync.Services.PathNames;
 
+
 namespace TiaTextSync.Services;
 
 internal enum ItemStatus
@@ -29,8 +30,8 @@ internal sealed class PlcComparison
     /// <summary>Статусы сравнённых элементов по <see cref="PlcItem.Key"/>.</summary>
     public Dictionary<string, ItemStatus> Items { get; } = new(StringComparer.Ordinal);
 
-    /// <summary>Число элементов, файлы которых есть в рабочей папке, но которых нет в ПЛК.</summary>
-    public int MissingInTia { get; set; }
+    /// <summary>Элементы рабочей папки, которых нет в ПЛК: удалены в TIA или добавлены через Git.</summary>
+    public List<WorkspaceItem> MissingInTia { get; set; } = new();
 }
 
 /// <summary>
@@ -94,7 +95,7 @@ internal static class CompareService
                     continue;
                 }
 
-                var exported = ItemFiles(tempRoot, item);
+                var exported = WorkspaceItem.ForItem(tempRoot, item).Files;
                 if (exported.Count == 0)
                 {
                     // Элемент пропущен (например, защищённый блок): сравнивать нечего
@@ -102,7 +103,7 @@ internal static class CompareService
                     continue;
                 }
 
-                var existing = ItemFiles(workRoot, item);
+                var existing = WorkspaceItem.ForItem(workRoot, item).Files;
                 var status   = existing.Count == 0 ? ItemStatus.New
                              : SameFiles(exported, existing) ? ItemStatus.Unchanged
                              : ItemStatus.Changed;
@@ -112,7 +113,7 @@ internal static class CompareService
                     progress.Report($"  {(status == ItemStatus.New ? "NEW " : "DIFF")} {plc.Name}/{item.Folder}/{item.Name}");
             }
 
-            result.MissingInTia = CountMissingInTia(workRoot, all);
+            result.MissingInTia = WorkspaceItem.CollectOrphans(workRoot, all);
             return export.WarningCount - export.NotCompiledKeys.Count;
         }
         finally
@@ -142,26 +143,7 @@ internal static class CompareService
         }
     }
 
-    /// <summary>Файлы элемента в его папке, по расширению.</summary>
-    private static Dictionary<string, string> ItemFiles(string plcDir, PlcItem item)
-    {
-        var files = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var dir   = ExportService.ItemDir(plcDir, item);
-        if (!Directory.Exists(dir))
-            return files;
-
-        var name = SafeName(item.Name);
-        foreach (var file in Directory.GetFiles(dir, name + ".*"))
-        {
-            var ext = Path.GetExtension(file);
-            if (string.Equals(Path.GetFileNameWithoutExtension(file), name, StringComparison.OrdinalIgnoreCase)
-                && ExportService.ManagedExtensions.Contains(ext))
-                files[ext] = file;
-        }
-        return files;
-    }
-
-    private static bool SameFiles(Dictionary<string, string> exported, Dictionary<string, string> existing) =>
+    private static bool SameFiles(IReadOnlyDictionary<string, string> exported, IReadOnlyDictionary<string, string> existing) =>
         exported.Count == existing.Count
         && exported.All(e => existing.TryGetValue(e.Key, out var other) && SameContent(e.Value, other));
 
@@ -171,33 +153,6 @@ internal static class CompareService
 
     private static IEnumerable<byte> WithoutCarriageReturns(byte[] bytes) =>
         bytes.Where(b => b != (byte)'\r');
-
-    /// <summary>Число элементов, файлы которых лежат в рабочей папке, но которых нет в ПЛК.</summary>
-    private static int CountMissingInTia(string workRoot, IReadOnlyList<PlcItem> all)
-    {
-        var owned = new HashSet<string>(
-            all.Select(i => Path.Combine(ExportService.ItemDir(workRoot, i), SafeName(i.Name))),
-            StringComparer.OrdinalIgnoreCase);
-
-        var orphans = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var root in ExportService.ItemRoots.Concat(ExportService.LegacyDirNames))
-        {
-            var dir = Path.Combine(workRoot, root);
-            if (!Directory.Exists(dir))
-                continue;
-
-            foreach (var file in Directory.GetFiles(dir, "*", SearchOption.AllDirectories))
-            {
-                if (!ExportService.ManagedExtensions.Contains(Path.GetExtension(file)))
-                    continue;
-
-                var stem = Path.Combine(Path.GetDirectoryName(file)!, Path.GetFileNameWithoutExtension(file));
-                if (!owned.Contains(stem))
-                    orphans.Add(stem);
-            }
-        }
-        return orphans.Count;
-    }
 
     private static string NewTempDir() =>
         Path.Combine(Path.GetTempPath(), "TiaTextSync", "compare-" + Guid.NewGuid().ToString("N"));

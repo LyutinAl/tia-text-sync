@@ -24,7 +24,7 @@
 | 4 | Нормализация XML (удаление нестабильных полей, стабильный diff) | ✅ Done |
 | 5 | Экспорт HW-конфигурации устройств → `hw.xml` | ✅ Done |
 | 6 | WinForms GUI: подключение, дерево проекта, выбор рабочей папки, экспорт | ✅ Done |
-| 7 | Импорт: исходники → `GenerateBlocksFromSource`, XML-блоки → `PlcBlockComposition.Import`, `tags/` → `PlcTagTableComposition.Import` | 📋 Planned |
+| 7 | Импорт: исходники → `GenerateBlocksFromSource`, XML-блоки → `PlcBlockComposition.Import`, `tags/` → `PlcTagTableComposition.Import` | 🧪 Проверка на TIA |
 | 8 | Сравнение TIA Portal с рабочей папкой по содержимому: отметки в дереве, экспорт только отличий или выбранного | ✅ Done |
 | 9 | Изменения в рабочей папке (из Git) относительно TIA Portal | 📋 Planned |
 
@@ -54,7 +54,7 @@
       tags/                     ← таблицы тегов в SimaticML XML, с группами проекта
         Main_Tags.xml
       types/                    ← UDT, с группами проекта
-        MotorType.scl
+        MotorType.udt
       tech/                     ← технологические объекты в SimaticML XML, с группами проекта
         Axis_1.xml
         PID_Compact_1.db        ← исходник DB, если TIA не поддерживает XML для объекта

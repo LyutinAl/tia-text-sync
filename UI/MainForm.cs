@@ -17,7 +17,7 @@ namespace TiaTextSync.UI;
 
 internal sealed class MainForm : Form
 {
-    private enum ExportMode
+    private enum Scope
     {
         /// <summary>Выбранная ветвь дерева: устройство, ПЛК, группа или элемент.</summary>
         Selection,
@@ -25,6 +25,25 @@ internal sealed class MainForm : Form
         Differences,
         /// <summary>Устройство целиком.</summary>
         Device
+    }
+
+    /// <summary>Что загрузить в один ПЛК при импорте.</summary>
+    private sealed class PlcImport
+    {
+        public PlcImport(PlcSoftware plc, string deviceDir, List<WorkspaceItem> items, int newCount)
+        {
+            Plc       = plc;
+            DeviceDir = deviceDir;
+            Items     = items;
+            NewCount  = newCount;
+        }
+
+        public PlcSoftware         Plc       { get; }
+        public string              DeviceDir { get; }
+        public List<WorkspaceItem> Items     { get; }
+
+        /// <summary>Сколько элементов из <see cref="Items"/> ещё нет в ПЛК.</summary>
+        public int NewCount { get; }
     }
 
     /// <summary>Что обработать на одном устройстве. Определяется на UI-потоке по выбору в дереве.</summary>
@@ -72,7 +91,7 @@ internal sealed class MainForm : Form
     private readonly ToolStripButton         _btnWorkspace;
     private readonly ToolStripSplitButton    _btnCompare;
     private readonly ToolStripSplitButton    _btnExport;
-    private readonly ToolStripButton         _btnImport;
+    private readonly ToolStripSplitButton    _btnImport;
     private readonly ToolStripDropDownButton _btnTools;
     private readonly ToolStripMenuItem       _itemRefresh;
     private readonly ToolStripMenuItem       _itemCompile;
@@ -123,18 +142,23 @@ internal sealed class MainForm : Form
             DropDownItems = { itemExportSelection, itemExportDifferences, itemExportDevice }
         };
 
-        _btnImport = new ToolStripButton("Импорт")
+        var itemImportSelection   = new ToolStripMenuItem("Выбранное в дереве");
+        var itemImportDifferences = new ToolStripMenuItem("Отличия по последнему сравнению");
+        var itemImportDevice      = new ToolStripMenuItem("Устройство целиком");
+
+        _btnImport = new ToolStripSplitButton("Импорт")
         {
-            Enabled     = false,
-            ToolTipText = "Импортировать изменения из рабочей папки в TIA (в разработке)"
+            Enabled       = false,
+            ToolTipText   = "Загрузить в TIA из рабочей папки выбранное в дереве: устройство, ПЛК, группу или элемент",
+            DropDownItems = { itemImportSelection, itemImportDifferences, itemImportDevice }
         };
 
         _itemRefresh = new ToolStripMenuItem("Обновить дерево") { Enabled = false };
 
-        _itemCompile = new ToolStripMenuItem("Компилировать перед экспортом и сравнением")
+        _itemCompile = new ToolStripMenuItem("Компилировать ПЛК при экспорте, сравнении и импорте")
         {
             CheckOnClick = true,
-            ToolTipText  = "Скомпилировать программу ПЛК перед экспортом и сравнением. Изменяет состояние проекта в TIA"
+            ToolTipText  = "Компилировать программу ПЛК перед экспортом и сравнением и после импорта. Изменяет состояние проекта в TIA"
         };
 
         _btnTools = new ToolStripDropDownButton("Инструменты")
@@ -201,17 +225,19 @@ internal sealed class MainForm : Form
         itemCompareSelection.Click += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await CompareAsync(wholeProject: false); });
         itemCompareProject.Click   += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await CompareAsync(wholeProject: true); });
 
-        itemExportSelection.Click   += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await ExportAsync(ExportMode.Selection); });
-        itemExportDifferences.Click += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await ExportAsync(ExportMode.Differences); });
-        itemExportDevice.Click      += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await ExportAsync(ExportMode.Device); });
+        itemExportSelection.Click   += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await ExportAsync(Scope.Selection); });
+        itemExportDifferences.Click += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await ExportAsync(Scope.Differences); });
+        itemExportDevice.Click      += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await ExportAsync(Scope.Device); });
 
         _itemRefresh.Click     += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await RefreshAsync(); });
         _btnWorkspace.Click    += async (_, _) => { if (SelectWorkspace()) await RefreshTreeQuietlyAsync(); };
         _btnCompare.ButtonClick += async (_, _) => await CompareAsync(wholeProject: false);
-        _btnExport.ButtonClick  += async (_, _) => await ExportAsync(ExportMode.Selection);
-        _btnImport.Click       += (_, _) => MessageBox.Show(
-                                      "Импорт пока в разработке.", "Импорт",
-                                      MessageBoxButtons.OK, MessageBoxIcon.Information);
+        _btnExport.ButtonClick  += async (_, _) => await ExportAsync(Scope.Selection);
+        _btnImport.ButtonClick  += async (_, _) => await ImportAsync(Scope.Selection);
+
+        itemImportSelection.Click   += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await ImportAsync(Scope.Selection); });
+        itemImportDifferences.Click += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await ImportAsync(Scope.Differences); });
+        itemImportDevice.Click      += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await ImportAsync(Scope.Device); });
         _btnDisconnect.Click   += (_, _) => Disconnect();
 
         _tree.AfterSelect += (_, _) => UpdateButtons();
@@ -320,9 +346,8 @@ internal sealed class MainForm : Form
         _btnWorkspace.Enabled  = !_isBusy;
         _btnCompare.Enabled    = !_isBusy && _project is not null;
         _btnExport.Enabled     = !_isBusy && _project is not null && hasDevice;
+        _btnImport.Enabled     = !_isBusy && _project is not null && hasDevice;
         _btnDisconnect.Enabled = !_isBusy && _session is not null;
-        // Импорт будет включён, когда появится реализация
-        _btnImport.Enabled     = false;
     }
 
     private static T? FindAncestorTag<T>(TreeNode? node) where T : class
@@ -366,8 +391,14 @@ internal sealed class MainForm : Form
         if (node.Tag is PlcSoftware)
             return new Target(device, plc, null, includeHw: false);
 
+        // Элементы ПЛК и файлы рабочей папки, которых нет в TIA
         var keys = new HashSet<string>(
-            AllNodes(node.Nodes).Prepend(node).Select(n => n.Tag).OfType<PlcItem>().Select(i => i.Key),
+            AllNodes(node.Nodes).Prepend(node).Select(n => n.Tag switch
+            {
+                PlcItem item          => item.Key,
+                WorkspaceItem missing => missing.Key,
+                _                     => null
+            }).OfType<string>(),
             StringComparer.Ordinal);
 
         if (keys.Count == 0)
@@ -376,6 +407,20 @@ internal sealed class MainForm : Form
             return null;
         }
         return new Target(device, plc, keys, includeHw: false);
+    }
+
+    private List<Target> ResolveTargets(Scope scope)
+    {
+        switch (scope)
+        {
+            case Scope.Differences:
+                return ProjectTargets();
+            case Scope.Device:
+                var device = FindAncestorTag<Device>(_tree.SelectedNode);
+                return device is null ? new List<Target>() : new List<Target> { new(device, null, null, includeHw: true) };
+            default:
+                return SelectionTarget() is { } target ? new List<Target> { target } : new List<Target>();
+        }
     }
 
     private List<Target> ProjectTargets() =>
@@ -395,6 +440,9 @@ internal sealed class MainForm : Form
 
     private static List<PlcItem> Filter(List<PlcItem> all, HashSet<string>? keys) =>
         keys is null ? all : all.Where(i => keys.Contains(i.Key)).ToList();
+
+    private static List<WorkspaceItem> Filter(List<WorkspaceItem> items, HashSet<string> keys) =>
+        items.Where(i => keys.Contains(i.Key)).ToList();
 
     // ── Действия ──────────────────────────────────────────────────────────────
 
@@ -598,7 +646,7 @@ internal sealed class MainForm : Form
 
                         warnings    += CompareService.ComparePlc(plc, deviceDir, all, selected, result, log);
                         differences += selected.Count(i => result.Items.TryGetValue(i.Key, out var status) && status != ItemStatus.Unchanged)
-                                     + result.MissingInTia;
+                                     + result.MissingInTia.Count;
                         notCompiled += selected.Count(i => result.Items.TryGetValue(i.Key, out var status) && status == ItemStatus.NotCompiled);
                     }
 
@@ -616,7 +664,7 @@ internal sealed class MainForm : Form
             Log(differences == 0 ? "Сравнение завершено: отличий нет." : $"Сравнение завершено: отличий {differences}.");
             if (notCompiled > 0)
                 Log($"Не скомпилировано: {notCompiled}. Их содержимое недоступно до компиляции, " +
-                    "скомпилируйте ПЛК в TIA или включите «Инструменты → Компилировать перед экспортом и сравнением».");
+                    "скомпилируйте ПЛК в TIA или включите «Инструменты → Компилировать ПЛК при экспорте, сравнении и импорте».");
 
             var summary = differences == 0 ? "Отличий нет" : $"Отличий: {differences}";
             if (notCompiled > 0) summary += $", не скомпилировано: {notCompiled}";
@@ -634,22 +682,9 @@ internal sealed class MainForm : Form
         await RefreshTreeQuietlyAsync();
     }
 
-    private async Task ExportAsync(ExportMode mode)
+    private async Task ExportAsync(Scope mode)
     {
-        List<Target> targets;
-        switch (mode)
-        {
-            case ExportMode.Differences:
-                targets = ProjectTargets();
-                break;
-            case ExportMode.Device:
-                var device = FindAncestorTag<Device>(_tree.SelectedNode);
-                targets = device is null ? new List<Target>() : new List<Target> { new(device, null, null, includeHw: true) };
-                break;
-            default:
-                targets = SelectionTarget() is { } target ? new List<Target> { target } : new List<Target>();
-                break;
-        }
+        var targets = ResolveTargets(mode);
         if (targets.Count == 0) return;
 
         var workspace = EnsureWorkspace();
@@ -675,17 +710,17 @@ internal sealed class MainForm : Form
                     {
                         var plcDir     = PathNames.PlcDir(deviceDir, plc.Name);
                         var comparison = compare.ForPlc(plcDir);
-                        if (mode == ExportMode.Differences && comparison is null)
+                        if (mode == Scope.Differences && comparison is null)
                             continue;  // ПЛК не сравнивался
                         compared |= comparison is not null;
 
                         var all      = PlcCatalog.Collect(plc);
-                        var selected = mode == ExportMode.Differences
+                        var selected = mode == Scope.Differences
                             ? all.Where(i => comparison!.Items.TryGetValue(i.Key, out var status)
                                              && status is ItemStatus.Changed or ItemStatus.New).ToList()
                             : Filter(all, target.Keys);
 
-                        if (mode == ExportMode.Differences && selected.Count == 0 && comparison!.MissingInTia == 0)
+                        if (mode == Scope.Differences && selected.Count == 0 && comparison!.MissingInTia.Count == 0)
                             continue;
 
                         if (compile)
@@ -701,10 +736,10 @@ internal sealed class MainForm : Form
                         var result = compare.GetOrAddPlc(plcDir);
                         foreach (var item in selected.Where(i => !export.FailedKeys.Contains(i.Key)))
                             result.Items[item.Key] = ItemStatus.Unchanged;
-                        result.MissingInTia = 0;
+                        result.MissingInTia = new List<WorkspaceItem>();
                     }
 
-                    var exportHw = mode == ExportMode.Differences
+                    var exportHw = mode == Scope.Differences
                         ? compare.HwChanged(deviceDir) == true
                         : target.IncludeHw;
                     if (exportHw)
@@ -720,7 +755,7 @@ internal sealed class MainForm : Form
             });
 
             Info($"ExportAsync: завершено, элементов {exported}, предупреждений {warnings}");
-            if (mode == ExportMode.Differences && !compared)
+            if (mode == Scope.Differences && !compared)
             {
                 Log("Нет результатов сравнения. Сначала выполните «Сравнить».");
                 Status("Нет результатов сравнения");
@@ -746,6 +781,149 @@ internal sealed class MainForm : Form
 
         await RefreshTreeQuietlyAsync();
     }
+
+    private async Task ImportAsync(Scope scope)
+    {
+        var targets = ResolveTargets(scope);
+        if (targets.Count == 0) return;
+
+        var workspace = EnsureWorkspace();
+        if (workspace is null) return;
+
+        var compile = _itemCompile.Checked;  // Читается здесь: контрол принадлежит UI-потоку
+        var compare = _compare;
+        var log     = NewProgress();
+
+        Info($"ImportAsync: режим {scope}, папка '{workspace}'");
+        SetBusy(true);
+        Status("Подготовка импорта...");
+        try
+        {
+            var plan  = await _sta.RunAsync(() => BuildImportPlan(targets, scope, workspace, compare));
+            var total = plan.Sum(p => p.Items.Count);
+            if (total == 0)
+            {
+                Log(scope == Scope.Differences
+                    ? "Нечего импортировать: нет отличий по последнему сравнению. Сначала выполните «Сравнить»."
+                    : "Нечего импортировать: в рабочей папке нет файлов выбранных элементов.");
+                Status("Нечего импортировать");
+                return;
+            }
+
+            var created = plan.Sum(p => p.NewCount);
+            var answer  = MessageBox.Show(this,
+                $"Загрузить в TIA Portal элементов из рабочей папки: {total}.\n" +
+                $"Новых: {created}, будет перезаписано: {total - created}.\n\n" +
+                "Изменения этих элементов в TIA, которых нет в рабочей папке, будут потеряны.",
+                "Импорт", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning);
+            if (answer != DialogResult.OK)
+            {
+                Status("Импорт отменён");
+                return;
+            }
+
+            Status("Импорт...");
+            var (imported, differences, warnings) = await _sta.RunAsync(() =>
+            {
+                int imported = 0, differences = 0, warnings = 0;
+                foreach (var import in plan)
+                {
+                    var importer = new ImportService(import.Plc, log);
+                    importer.Import(import.Items);
+                    warnings += importer.WarningCount;
+                    imported += importer.Imported.Count;
+
+                    if (compile)
+                        warnings += PlcCompiler.Compile(import.Plc, log);
+
+                    // Проверка: загруженное выгружается обратно и сравнивается с рабочей папкой
+                    var all   = PlcCatalog.Collect(import.Plc);
+                    var check = all.Where(i => importer.Imported.Any(w => w.Matches(i))).ToList();
+                    if (check.Count == 0)
+                        continue;
+
+                    var result = compare.GetOrAddPlc(PathNames.PlcDir(import.DeviceDir, import.Plc.Name));
+                    warnings    += CompareService.ComparePlc(import.Plc, import.DeviceDir, all, check, result, log);
+                    differences += check.Count(i => result.Items.TryGetValue(i.Key, out var status) && status != ItemStatus.Unchanged);
+                }
+                return (imported, differences, warnings);
+            });
+
+            Info($"ImportAsync: загружено {imported}, отличается после импорта {differences}, ошибок {warnings}");
+            Log($"Импорт завершён: загружено {imported} из {total}.");
+            if (differences > 0)
+                Log($"После импорта отличается от рабочей папки: {differences}. " +
+                    "TIA сохранил эти элементы не так, как в файле, или они не скомпилированы.");
+
+            var summary = $"Загружено: {imported}";
+            if (differences > 0) summary += $", отличается после импорта: {differences}";
+            if (warnings > 0)    summary += $", ошибок: {warnings}";
+            Status(summary);
+        }
+        catch (Exception ex)
+        {
+            Error("ImportAsync: ошибка", ex);
+            Log($"Ошибка: {ex.Message}");
+            Status("Ошибка импорта");
+        }
+        finally { SetBusy(false); }
+
+        await RefreshTreeQuietlyAsync();
+    }
+
+    /// <summary>
+    /// Определяет, какие файлы загрузить в каждый ПЛК. Выполняется на потоке StaWorker.
+    /// Для существующих элементов берутся их файлы, для отсутствующих в TIA — файлы рабочей папки
+    /// без пары в ПЛК. Системные блоки и форматы, которые не импортируются, отбрасываются.
+    /// </summary>
+    private static List<PlcImport> BuildImportPlan(List<Target> targets, Scope scope, string workspace, CompareResults compare)
+    {
+        var plan = new List<PlcImport>();
+        foreach (var target in targets)
+        {
+            var deviceDir = PathNames.DeviceDir(workspace, target.Device.Name);
+            foreach (var plc in TargetPlcs(target))
+            {
+                var plcDir     = PathNames.PlcDir(deviceDir, plc.Name);
+                var all        = PlcCatalog.Collect(plc);
+                var comparison = compare.ForPlc(plcDir);
+                var keys       = target.Keys;
+
+                List<PlcItem>       existing;
+                List<WorkspaceItem> missing;
+                if (scope == Scope.Differences)
+                {
+                    if (comparison is null)
+                        continue;  // ПЛК не сравнивался
+                    existing = ItemsWithStatus(all, comparison, ItemStatus.Changed);
+                    missing  = comparison.MissingInTia;
+                }
+                else if (keys is null)
+                {
+                    existing = all;
+                    missing  = WorkspaceItem.CollectOrphans(plcDir, all);
+                }
+                else
+                {
+                    existing = Filter(all, keys);
+                    missing  = comparison is null ? new List<WorkspaceItem>() : Filter(comparison.MissingInTia, keys);
+                }
+
+                var updates = existing.Where(i => !i.IsSystem)
+                                      .Select(i => WorkspaceItem.ForItem(plcDir, i))
+                                      .Where(w => w.ImportFile is not null)
+                                      .ToList();
+                var creates = missing.Where(w => !w.IsSystem && w.ImportFile is not null).ToList();
+
+                if (updates.Count + creates.Count > 0)
+                    plan.Add(new PlcImport(plc, deviceDir, updates.Concat(creates).ToList(), creates.Count));
+            }
+        }
+        return plan;
+    }
+
+    private static List<PlcItem> ItemsWithStatus(List<PlcItem> all, PlcComparison comparison, ItemStatus status) =>
+        all.Where(i => comparison.Items.TryGetValue(i.Key, out var s) && s == status).ToList();
 
     private void Disconnect()
     {

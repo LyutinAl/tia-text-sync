@@ -15,13 +15,15 @@ internal enum PlcItemKind { Block, TagTable, Type, TechnologicalObject }
 /// <summary>Элемент ПЛК, который экспортируется в собственный файл.</summary>
 internal sealed class PlcItem
 {
-    public PlcItem(PlcItemKind kind, IEngineeringObject engineeringObject, string name, string root, IReadOnlyList<string> groups)
+    public PlcItem(PlcItemKind kind, IEngineeringObject engineeringObject, string name, string root,
+                   IReadOnlyList<string> groups, bool isSystem = false)
     {
-        Kind   = kind;
-        Object = engineeringObject;
-        Name   = name;
-        Root   = root;
-        Groups = groups;
+        Kind     = kind;
+        Object   = engineeringObject;
+        Name     = name;
+        Root     = root;
+        Groups   = groups;
+        IsSystem = isSystem;
         Folder = string.Join("/", new[] { root }.Concat(groups.Select(SafeName)));
     }
 
@@ -37,6 +39,9 @@ internal sealed class PlcItem
 
     /// <summary>Папка файла относительно папки ПЛК, например «blocks/Motors».</summary>
     public string Folder { get; }
+
+    /// <summary>Системный блок: его создаёт сам TIA Portal, поэтому он не импортируется.</summary>
+    public bool IsSystem { get; }
 
     /// <summary>Имена уникальны в пределах вида элемента внутри ПЛК.</summary>
     public string Key => $"{Kind}:{Name}";
@@ -84,7 +89,7 @@ internal static class PlcCatalog
         {
             var path = With(groups, group.Name);
             foreach (PlcBlock block in group.Blocks)
-                items.Add(new PlcItem(PlcItemKind.Block, block, block.Name, BlocksRoot, path));
+                items.Add(new PlcItem(PlcItemKind.Block, block, block.Name, BlocksRoot, path, isSystem: true));
 
             AddSystemBlocks(group.Groups, path, items);
         }

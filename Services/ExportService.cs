@@ -22,7 +22,7 @@ namespace TiaTextSync.Services;
 /// Структура вывода:
 ///   &lt;deviceDir&gt;/&lt;PlcName&gt;/blocks/&lt;группы&gt;/ — блоки (.scl / .awl / .db / .xml)
 ///   &lt;deviceDir&gt;/&lt;PlcName&gt;/tags/&lt;группы&gt;/   — таблицы тегов в SimaticML (.xml)
-///   &lt;deviceDir&gt;/&lt;PlcName&gt;/types/&lt;группы&gt;/  — UDT (.scl)
+///   &lt;deviceDir&gt;/&lt;PlcName&gt;/types/&lt;группы&gt;/  — UDT (.udt)
 ///   &lt;deviceDir&gt;/&lt;PlcName&gt;/tech/&lt;группы&gt;/   — технологические объекты: SimaticML (.xml) или исходник DB (.db)
 ///
 /// Формат файла зависит от языка блока: SCL, STL и DB экспортируются исходником,
@@ -41,7 +41,7 @@ internal sealed class ExportService
     // Удаляются только файлы форматов экспорта (.csv и .to — прежние форматы тегов и технологических объектов)
     internal static readonly HashSet<string> ManagedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".scl", ".awl", ".db", ".xml", ".csv", ".lad", ".fbd", ".to"
+        ".scl", ".awl", ".db", ".udt", ".xml", ".csv", ".lad", ".fbd", ".to"
     };
 
     // Папки прежней раскладки по языкам: очищаются при первом экспорте в новую структуру
@@ -227,7 +227,8 @@ internal sealed class ExportService
                 return;
             }
 
-            GenerateSourceFile(type, dir, $"{SafeName(type.Name)}.scl", "SCL");
+            // TIA Portal выдаёт исходник UDT только в файл с расширением .udt
+            GenerateSourceFile(type, dir, $"{SafeName(type.Name)}.udt", "UDT");
         }
         catch (Exception ex)
         {
