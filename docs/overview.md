@@ -25,7 +25,8 @@
 | 5 | Экспорт HW-конфигурации устройств → `hw.xml` | ✅ Done |
 | 6 | WinForms GUI: подключение, дерево проекта, выбор рабочей папки, экспорт | ✅ Done |
 | 7 | Импорт: исходники → `GenerateBlocksFromSource`, XML-блоки → `PlcBlockComposition.Import`, `tags/` → `PlcTagTableComposition.Import` | 📋 Planned |
-| 8 | Сравнение изменений между рабочей папкой и TIA Portal | 📋 Planned |
+| 8 | Сравнение TIA Portal с рабочей папкой по содержимому: отметки в дереве, экспорт только отличий или выбранного | ✅ Done |
+| 9 | Изменения в рабочей папке (из Git) относительно TIA Portal | 📋 Planned |
 
 ## Рабочая папка (workspace)
 

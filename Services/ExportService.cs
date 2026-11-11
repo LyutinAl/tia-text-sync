@@ -8,13 +8,15 @@ using Siemens.Engineering.SW.Types;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using TiaTextSync.Core;
+using static TiaTextSync.Services.PathNames;
 
 namespace TiaTextSync.Services;
 
 /// <summary>
-/// Экспортирует содержимое ПЛК (блоки, таблицы тегов, UDT) в структуру папок для Git.
+/// Экспортирует элементы ПЛК (блоки, таблицы тегов, UDT, технологические объекты) в структуру папок для Git.
 /// Вложенные папки повторяют группы проекта TIA Portal.
 ///
 /// Структура вывода:
@@ -29,63 +31,93 @@ namespace TiaTextSync.Services;
 ///
 /// Файлы сначала создаются во временной папке и только после успеха заменяют файлы
 /// в рабочей папке, поэтому сбой экспорта одного элемента не портит его прошлую версию.
-/// После экспорта файлы элементов, которых больше нет в ПЛК, удаляются.
+/// После экспорта удаляются файлы элементов, которых больше нет в ПЛК.
+/// Файлы элементов, не вошедших в выборку, не трогаются.
 ///
 /// Должен выполняться на потоке <see cref="TiaTextSync.Core.StaWorker"/>.
 /// </summary>
 internal sealed class ExportService
 {
     // Удаляются только файлы форматов экспорта (.csv и .to — прежние форматы тегов и технологических объектов)
-    private static readonly HashSet<string> ManagedExtensions = new(StringComparer.OrdinalIgnoreCase)
+    internal static readonly HashSet<string> ManagedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".scl", ".awl", ".db", ".xml", ".csv", ".lad", ".fbd", ".to"
     };
 
     // Папки прежней раскладки по языкам: очищаются при первом экспорте в новую структуру
-    private static readonly string[] LegacyDirNames = { "src", "xml" };
+    internal static readonly string[] LegacyDirNames = { "src", "xml" };
+
+    internal static readonly string[] ItemRoots =
+    {
+        PlcCatalog.BlocksRoot, PlcCatalog.TagsRoot, PlcCatalog.TypesRoot, PlcCatalog.TechRoot
+    };
 
     private readonly PlcSoftware       _plc;
     private readonly IProgress<string> _progress;
 
     private readonly string _root;
-    private readonly string _blocksDir;
-    private readonly string _tagsDir;
-    private readonly string _typesDir;
-    private readonly string _techDir;
     private readonly string _tempDir;
 
-    private readonly HashSet<string> _writtenFiles = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<string> _failedNames  = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _writtenFiles   = new(StringComparer.OrdinalIgnoreCase);
+    // Имена элементов, чьи прежние файлы сохраняются: не вошли в выборку, пропущены или завершились ошибкой
+    private readonly HashSet<string> _preservedNames = new(StringComparer.OrdinalIgnoreCase);
+
+    private const string NotCompiledMessage =
+        "не скомпилирован, TIA Portal не экспортирует такие элементы. " +
+        "Скомпилируйте ПЛК или включите «Инструменты → Компилировать перед экспортом и сравнением»";
+
+    private readonly HashSet<string> _failedKeys      = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _notCompiledKeys = new(StringComparer.Ordinal);
+    private bool _currentNotCompiled;
 
     /// <summary>Количество элементов, обработанных с ошибкой во время <see cref="Export"/>.</summary>
     public int WarningCount { get; private set; }
 
-    public ExportService(PlcSoftware plc, string outputDir, IProgress<string> progress)
+    /// <summary>Ключи элементов, экспорт которых завершился ошибкой.</summary>
+    public IReadOnlyCollection<string> FailedKeys => _failedKeys;
+
+    /// <summary>Ключи элементов из <see cref="FailedKeys"/>, которые не выгружены, потому что не скомпилированы.</summary>
+    public IReadOnlyCollection<string> NotCompiledKeys => _notCompiledKeys;
+
+    public ExportService(PlcSoftware plc, string deviceDir, IProgress<string> progress)
     {
         _plc      = plc;
         _progress = progress;
-
-        _root      = Path.Combine(Path.GetFullPath(outputDir), SafeName(plc.Name));  // Openness требует абсолютные пути
-        _blocksDir = Path.Combine(_root, "blocks");
-        _tagsDir   = Path.Combine(_root, "tags");
-        _typesDir  = Path.Combine(_root, "types");
-        _techDir   = Path.Combine(_root, "tech");
-        _tempDir   = Path.Combine(Path.GetTempPath(), "TiaTextSync", Guid.NewGuid().ToString("N"));
+        _root     = PlcDir(deviceDir, plc.Name);
+        _tempDir  = Path.Combine(Path.GetTempPath(), "TiaTextSync", Guid.NewGuid().ToString("N"));
     }
 
-    public void Export()
+    /// <summary>
+    /// Экспортирует <paramref name="selected"/>.
+    /// <paramref name="all"/> — все элементы ПЛК: по нему определяются файлы удалённых элементов.
+    /// </summary>
+    public void Export(IReadOnlyList<PlcItem> all, IReadOnlyCollection<PlcItem> selected)
     {
-        _progress.Report($"Экспорт ПЛК: {_plc.Name}");
+        _progress.Report(selected.Count == all.Count
+            ? $"Экспорт ПЛК: {_plc.Name}"
+            : $"Экспорт ПЛК: {_plc.Name}, элементов {selected.Count} из {all.Count}");
+
         Directory.CreateDirectory(_tempDir);
         try
         {
-            ExportBlockGroup(_plc.BlockGroup, _blocksDir);
-            ExportSystemBlockGroups(_plc.BlockGroup.SystemBlockGroups, _blocksDir);
-            ExportTagTableGroup(_plc.TagTableGroup, _tagsDir);
-            ExportTypeGroup(_plc.TypeGroup, _typesDir);
-            ExportTechnologicalObjectGroup(_plc.TechnologicalObjectGroup, _techDir);
+            var selectedKeys = new HashSet<string>(selected.Select(i => i.Key), StringComparer.Ordinal);
+            foreach (var item in all.Where(i => !selectedKeys.Contains(i.Key)))
+                _preservedNames.Add(SafeName(item.Name));
 
-            // Выполняется, только если все группы удалось перебрать:
+            foreach (var item in selected)
+            {
+                var warnings = WarningCount;
+                _currentNotCompiled = false;
+                ExportItem(item, ItemDir(_root, item));
+                if (WarningCount == warnings)
+                    continue;
+
+                _failedKeys.Add(item.Key);
+                if (_currentNotCompiled)
+                    _notCompiledKeys.Add(item.Key);
+            }
+
+            // Выполняется, только если все элементы удалось перебрать:
             // при сбое обхода неполный список файлов не должен приводить к удалению.
             RemoveStaleFiles();
         }
@@ -95,35 +127,33 @@ internal sealed class ExportService
         }
     }
 
-    // ── Блоки ────────────────────────────────────────────────────────────────
+    /// <summary>Папка файлов элемента внутри папки ПЛК.</summary>
+    internal static string ItemDir(string plcDir, PlcItem item) =>
+        Path.Combine(plcDir, item.Folder.Replace('/', Path.DirectorySeparatorChar));
 
-    private void ExportBlockGroup(PlcBlockGroup group, string dir)
+    private void ExportItem(PlcItem item, string dir)
     {
-        foreach (PlcBlock block in group.Blocks)
-            ExportBlock(block, dir);
-
-        foreach (PlcBlockUserGroup sub in group.Groups)
-            ExportBlockGroup(sub, Path.Combine(dir, SafeName(sub.Name)));
-    }
-
-    // Системные группы не входят в PlcBlockGroup.Groups. Верхняя группа уже называется «System blocks».
-    private void ExportSystemBlockGroups(PlcSystemBlockGroupComposition groups, string dir)
-    {
-        foreach (PlcSystemBlockGroup group in groups)
+        switch (item.Kind)
         {
-            var groupDir = Path.Combine(dir, SafeName(group.Name));
-
-            foreach (PlcBlock block in group.Blocks)
-                ExportBlock(block, groupDir);
-
-            ExportSystemBlockGroups(group.Groups, groupDir);
+            case PlcItemKind.Block:               ExportBlock((PlcBlock)item.Object, dir);                              break;
+            case PlcItemKind.TagTable:            ExportTagTable((PlcTagTable)item.Object, dir);                        break;
+            case PlcItemKind.Type:                ExportType((PlcType)item.Object, dir);                                break;
+            case PlcItemKind.TechnologicalObject: ExportTechnologicalObject((TechnologicalInstanceDB)item.Object, dir); break;
         }
     }
+
+    // ── Блоки ────────────────────────────────────────────────────────────────
 
     private void ExportBlock(PlcBlock block, string dir)
     {
         try
         {
+            if (!block.IsConsistent)
+            {
+                WarnNotCompiled(block.Name);
+                return;
+            }
+
             // IGenerateSource реализован самим PlcBlock, поэтому проверять нужно язык блока.
             var language = block.ProgrammingLanguage;
             if (language is not (ProgrammingLanguage.SCL or ProgrammingLanguage.STL or ProgrammingLanguage.DB))
@@ -168,15 +198,6 @@ internal sealed class ExportService
 
     // ── Таблицы тегов ────────────────────────────────────────────────────────
 
-    private void ExportTagTableGroup(PlcTagTableGroup group, string dir)
-    {
-        foreach (PlcTagTable table in group.TagTables)
-            ExportTagTable(table, dir);
-
-        foreach (PlcTagTableUserGroup sub in group.Groups)
-            ExportTagTableGroup(sub, Path.Combine(dir, SafeName(sub.Name)));
-    }
-
     private void ExportTagTable(PlcTagTable table, string dir)
     {
         try
@@ -196,19 +217,16 @@ internal sealed class ExportService
 
     // ── Пользовательские типы (UDT) ──────────────────────────────────────────
 
-    private void ExportTypeGroup(PlcTypeGroup group, string dir)
-    {
-        foreach (PlcType type in group.Types)
-            ExportType(type, dir);
-
-        foreach (PlcTypeUserGroup sub in group.Groups)
-            ExportTypeGroup(sub, Path.Combine(dir, SafeName(sub.Name)));
-    }
-
     private void ExportType(PlcType type, string dir)
     {
         try
         {
+            if (!type.IsConsistent)
+            {
+                WarnNotCompiled(type.Name);
+                return;
+            }
+
             GenerateSourceFile(type, dir, $"{SafeName(type.Name)}.scl", "SCL");
         }
         catch (Exception ex)
@@ -219,19 +237,16 @@ internal sealed class ExportService
 
     // ── Технологические объекты ──────────────────────────────────────────────
 
-    private void ExportTechnologicalObjectGroup(TechnologicalInstanceDBGroup group, string dir)
-    {
-        foreach (TechnologicalInstanceDB technologicalObject in group.TechnologicalObjects)
-            ExportTechnologicalObject(technologicalObject, dir);
-
-        foreach (TechnologicalInstanceDBUserGroup sub in group.Groups)
-            ExportTechnologicalObjectGroup(sub, Path.Combine(dir, SafeName(sub.Name)));
-    }
-
     private void ExportTechnologicalObject(TechnologicalInstanceDB technologicalObject, string dir)
     {
         try
         {
+            if (!technologicalObject.IsConsistent)
+            {
+                WarnNotCompiled(technologicalObject.Name);
+                return;
+            }
+
             var name     = SafeName(technologicalObject.Name);
             var tempPath = Path.Combine(_tempDir, $"{name}.xml");
 
@@ -284,13 +299,11 @@ internal sealed class ExportService
 
     /// <summary>
     /// Удаляет файлы элементов, которых больше нет в ПЛК, и опустевшие папки.
-    /// Файлы элементов, экспорт которых завершился ошибкой, сохраняются.
+    /// Файлы элементов из <see cref="_preservedNames"/> сохраняются.
     /// </summary>
     private void RemoveStaleFiles()
     {
-        var dirs = new List<string> { _blocksDir, _tagsDir, _typesDir, _techDir };
-        foreach (var legacy in LegacyDirNames)
-            dirs.Add(Path.Combine(_root, legacy));
+        var dirs = ItemRoots.Concat(LegacyDirNames).Select(name => Path.Combine(_root, name));
 
         foreach (var dir in dirs)
         {
@@ -300,7 +313,7 @@ internal sealed class ExportService
             foreach (var file in Directory.GetFiles(dir, "*", SearchOption.AllDirectories))
             {
                 if (_writtenFiles.Contains(file)
-                    || _failedNames.Contains(Path.GetFileNameWithoutExtension(file))
+                    || _preservedNames.Contains(Path.GetFileNameWithoutExtension(file))
                     || !ManagedExtensions.Contains(Path.GetExtension(file)))
                     continue;
 
@@ -351,27 +364,29 @@ internal sealed class ExportService
     // Ожидаемый пропуск: не считается ошибкой, а прошлый файл элемента сохраняется
     private void Skip(string name, string reason)
     {
-        _failedNames.Add(SafeName(name));
+        _preservedNames.Add(SafeName(name));
         _progress.Report($"  SKIP {name}: {reason}");
         Logger.Warn($"ExportService: пропущен '{_plc.Name}/{name}': {reason}");
+    }
+
+    // Проверяется до вызова TIA: исключение Openness не объясняет, что делать
+    private void WarnNotCompiled(string name)
+    {
+        WarningCount++;
+        _currentNotCompiled = true;
+        _preservedNames.Add(SafeName(name));
+        _progress.Report($"  WARN {name}: {NotCompiledMessage}");
+        Logger.Warn($"ExportService: '{_plc.Name}/{name}' {NotCompiledMessage}");
     }
 
     private void Warn(string name, Exception ex)
     {
         WarningCount++;
-        _failedNames.Add(SafeName(name));
+        _preservedNames.Add(SafeName(name));
         _progress.Report($"  WARN {name}: {ex.Message}");
         Logger.Error($"ExportService: ошибка экспорта '{_plc.Name}/{name}'", ex);
     }
 
     private string DisplayPath(string path) =>
         $"{_plc.Name}/{path.Substring(_root.Length + 1).Replace('\\', '/')}";
-
-    /// <summary>Приводит имя из TIA Portal к допустимому имени файла или папки Windows.</summary>
-    private static string SafeName(string name)
-    {
-        // Windows отбрасывает завершающие точки и пробелы в именах
-        var safe = string.Concat(name.Split(Path.GetInvalidFileNameChars())).TrimEnd(' ', '.');
-        return safe.Length > 0 ? safe : "_";
-    }
 }

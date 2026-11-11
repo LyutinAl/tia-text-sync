@@ -3,8 +3,10 @@ using Siemens.Engineering.HW;
 using Siemens.Engineering.HW.Features;
 using Siemens.Engineering.SW;
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using TiaTextSync.Core;
@@ -15,12 +17,47 @@ namespace TiaTextSync.UI;
 
 internal sealed class MainForm : Form
 {
+    private enum ExportMode
+    {
+        /// <summary>Выбранная ветвь дерева: устройство, ПЛК, группа или элемент.</summary>
+        Selection,
+        /// <summary>Элементы, которые последнее сравнение отметило как отличающиеся.</summary>
+        Differences,
+        /// <summary>Устройство целиком.</summary>
+        Device
+    }
+
+    /// <summary>Что обработать на одном устройстве. Определяется на UI-потоке по выбору в дереве.</summary>
+    private sealed class Target
+    {
+        public Target(Device device, PlcSoftware? plc, HashSet<string>? keys, bool includeHw)
+        {
+            Device    = device;
+            Plc       = plc;
+            Keys      = keys;
+            IncludeHw = includeHw;
+        }
+
+        public Device Device { get; }
+
+        /// <summary>null — все ПЛК устройства.</summary>
+        public PlcSoftware? Plc { get; }
+
+        /// <summary>Ключи <see cref="PlcItem.Key"/>; null — все элементы ПЛК.</summary>
+        public HashSet<string>? Keys { get; }
+
+        public bool IncludeHw { get; }
+    }
+
     // ── Состояние ─────────────────────────────────────────────────────────────
     private readonly StaWorker        _sta       = new();
     private readonly WorkspaceService _workspace = new();
-    private TiaSession? _session;
-    private Project?    _project;
-    private bool        _isBusy;
+    private TiaSession?     _session;
+    private Project?        _project;
+    private CompareResults  _compare = new();
+    private bool            _isBusy;
+    private bool            _refreshing;
+    private bool            _refreshPending;
 
     // ── Элементы управления ───────────────────────────────────────────────────
     private readonly ToolStrip            _toolbar;
@@ -33,7 +70,8 @@ internal sealed class MainForm : Form
 
     private readonly ToolStripDropDownButton _btnOpen;
     private readonly ToolStripButton         _btnWorkspace;
-    private readonly ToolStripButton         _btnExport;
+    private readonly ToolStripSplitButton    _btnCompare;
+    private readonly ToolStripSplitButton    _btnExport;
     private readonly ToolStripButton         _btnImport;
     private readonly ToolStripDropDownButton _btnTools;
     private readonly ToolStripMenuItem       _itemRefresh;
@@ -64,10 +102,25 @@ internal sealed class MainForm : Form
 
         _btnWorkspace = new ToolStripButton("Рабочая папка...");
 
-        _btnExport = new ToolStripButton("Экспорт")
+        var itemCompareSelection = new ToolStripMenuItem("Выбранное в дереве");
+        var itemCompareProject   = new ToolStripMenuItem("Весь проект");
+
+        _btnCompare = new ToolStripSplitButton("Сравнить")
         {
-            Enabled     = false,
-            ToolTipText = "Экспортировать выбранное устройство в рабочую папку"
+            Enabled       = false,
+            ToolTipText   = "Сравнить выбранное в дереве с рабочей папкой",
+            DropDownItems = { itemCompareSelection, itemCompareProject }
+        };
+
+        var itemExportSelection   = new ToolStripMenuItem("Выбранное в дереве");
+        var itemExportDifferences = new ToolStripMenuItem("Отличия по последнему сравнению");
+        var itemExportDevice      = new ToolStripMenuItem("Устройство целиком");
+
+        _btnExport = new ToolStripSplitButton("Экспорт")
+        {
+            Enabled       = false,
+            ToolTipText   = "Экспортировать выбранное в дереве: устройство, ПЛК, группу или элемент",
+            DropDownItems = { itemExportSelection, itemExportDifferences, itemExportDevice }
         };
 
         _btnImport = new ToolStripButton("Импорт")
@@ -78,10 +131,10 @@ internal sealed class MainForm : Form
 
         _itemRefresh = new ToolStripMenuItem("Обновить дерево") { Enabled = false };
 
-        _itemCompile = new ToolStripMenuItem("Компилировать при экспорте")
+        _itemCompile = new ToolStripMenuItem("Компилировать перед экспортом и сравнением")
         {
             CheckOnClick = true,
-            ToolTipText  = "Перед экспортом скомпилировать программу ПЛК. Изменяет состояние проекта в TIA"
+            ToolTipText  = "Скомпилировать программу ПЛК перед экспортом и сравнением. Изменяет состояние проекта в TIA"
         };
 
         _btnTools = new ToolStripDropDownButton("Инструменты")
@@ -98,6 +151,7 @@ internal sealed class MainForm : Form
                 new ToolStripSeparator(),
                 _btnWorkspace,
                 new ToolStripSeparator(),
+                _btnCompare,
                 _btnExport,
                 _btnImport,
                 new ToolStripSeparator(),
@@ -113,6 +167,7 @@ internal sealed class MainForm : Form
             Dock          = DockStyle.Fill,
             ShowLines     = true,
             ShowPlusMinus = true,
+            HideSelection = false,
             Font          = new Font("Segoe UI", 9f)
         };
 
@@ -143,13 +198,21 @@ internal sealed class MainForm : Form
         itemConnect.Click  += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await ConnectToOpenAsync(); });
         itemOpenFile.Click += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await OpenFileAsync(); });
 
-        _itemRefresh.Click   += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await RefreshAsync(); });
-        _btnWorkspace.Click  += (_, _) => SelectWorkspace();
-        _btnExport.Click     += async (_, _) => await ExportDeviceAsync();
-        _btnImport.Click     += (_, _) => MessageBox.Show(
-                                    "Импорт пока в разработке.", "Импорт",
-                                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-        _btnDisconnect.Click += (_, _) => Disconnect();
+        itemCompareSelection.Click += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await CompareAsync(wholeProject: false); });
+        itemCompareProject.Click   += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await CompareAsync(wholeProject: true); });
+
+        itemExportSelection.Click   += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await ExportAsync(ExportMode.Selection); });
+        itemExportDifferences.Click += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await ExportAsync(ExportMode.Differences); });
+        itemExportDevice.Click      += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await ExportAsync(ExportMode.Device); });
+
+        _itemRefresh.Click     += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await RefreshAsync(); });
+        _btnWorkspace.Click    += async (_, _) => { if (SelectWorkspace()) await RefreshTreeQuietlyAsync(); };
+        _btnCompare.ButtonClick += async (_, _) => await CompareAsync(wholeProject: false);
+        _btnExport.ButtonClick  += async (_, _) => await ExportAsync(ExportMode.Selection);
+        _btnImport.Click       += (_, _) => MessageBox.Show(
+                                      "Импорт пока в разработке.", "Импорт",
+                                      MessageBoxButtons.OK, MessageBoxIcon.Information);
+        _btnDisconnect.Click   += (_, _) => Disconnect();
 
         _tree.AfterSelect += (_, _) => UpdateButtons();
 
@@ -173,7 +236,8 @@ internal sealed class MainForm : Form
 
     // ── Рабочая папка ─────────────────────────────────────────────────────────
 
-    private void SelectWorkspace()
+    /// <summary>Показывает выбор рабочей папки. Возвращает true, если папка выбрана.</summary>
+    private bool SelectWorkspace()
     {
         using var dlg = new FolderBrowserDialog
         {
@@ -181,11 +245,30 @@ internal sealed class MainForm : Form
             SelectedPath        = _workspace.WorkspaceDir ?? "",
             ShowNewFolderButton = true
         };
-        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        if (dlg.ShowDialog(this) != DialogResult.OK) return false;
 
         _workspace.Set(dlg.SelectedPath);
+        _compare = new CompareResults();  // Результаты относятся к прежней папке
         UpdateWorkspaceLabel();
         Log($"Рабочая папка: {dlg.SelectedPath}");
+        return true;
+    }
+
+    /// <summary>Возвращает рабочую папку, при необходимости предлагая её выбрать.</summary>
+    private string? EnsureWorkspace()
+    {
+        if (_workspace.WorkspaceDir is null)
+        {
+            var answer = MessageBox.Show(
+                "Рабочая папка (Git-репозиторий) не выбрана.\nВыбрать сейчас?",
+                "Рабочая папка",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question);
+
+            if (answer == DialogResult.Yes)
+                SelectWorkspace();
+        }
+        return _workspace.WorkspaceDir;
     }
 
     private void UpdateWorkspaceLabel()
@@ -230,16 +313,88 @@ internal sealed class MainForm : Form
 
     private void UpdateButtons()
     {
-        var hasDevice  = FindSelectedDevice() is not null;
+        var hasDevice  = FindAncestorTag<Device>(_tree.SelectedNode) is not null;
         _btnOpen.Enabled       = !_isBusy;
         _btnTools.Enabled      = !_isBusy;
         _itemRefresh.Enabled   = _project is not null;
         _btnWorkspace.Enabled  = !_isBusy;
+        _btnCompare.Enabled    = !_isBusy && _project is not null;
         _btnExport.Enabled     = !_isBusy && _project is not null && hasDevice;
         _btnDisconnect.Enabled = !_isBusy && _session is not null;
         // Импорт будет включён, когда появится реализация
         _btnImport.Enabled     = false;
     }
+
+    private static T? FindAncestorTag<T>(TreeNode? node) where T : class
+    {
+        while (node is not null)
+        {
+            if (node.Tag is T tag) return tag;
+            node = node.Parent;
+        }
+        return null;
+    }
+
+    private static IEnumerable<TreeNode> AllNodes(TreeNodeCollection nodes)
+    {
+        foreach (TreeNode node in nodes)
+        {
+            yield return node;
+            foreach (var child in AllNodes(node.Nodes))
+                yield return child;
+        }
+    }
+
+    // Путь по подписям без отметок статуса: не меняется, когда меняется статус узла
+    private static string NodePath(TreeNode node) =>
+        node.Parent is null ? node.Name : $"{NodePath(node.Parent)}\n{node.Name}";
+
+    // ── Выбор целей ───────────────────────────────────────────────────────────
+
+    /// <summary>Цель по выбранному узлу: устройство целиком, ПЛК или набор элементов.</summary>
+    private Target? SelectionTarget()
+    {
+        var node   = _tree.SelectedNode;
+        var device = FindAncestorTag<Device>(node);
+        if (node is null || device is null)
+            return null;
+
+        var plc = FindAncestorTag<PlcSoftware>(node);
+        if (plc is null)
+            return new Target(device, null, null, includeHw: true);  // Выбрано устройство или его HW
+
+        if (node.Tag is PlcSoftware)
+            return new Target(device, plc, null, includeHw: false);
+
+        var keys = new HashSet<string>(
+            AllNodes(node.Nodes).Prepend(node).Select(n => n.Tag).OfType<PlcItem>().Select(i => i.Key),
+            StringComparer.Ordinal);
+
+        if (keys.Count == 0)
+        {
+            Log("В выбранной ветви нет элементов.");
+            return null;
+        }
+        return new Target(device, plc, keys, includeHw: false);
+    }
+
+    private List<Target> ProjectTargets() =>
+        _tree.Nodes.Cast<TreeNode>()
+            .Select(n => n.Tag).OfType<Device>()
+            .Select(d => new Target(d, null, null, includeHw: true))
+            .ToList();
+
+    /// <summary>ПЛК цели. Перечисляется на потоке StaWorker.</summary>
+    private static IEnumerable<PlcSoftware> TargetPlcs(Target target)
+    {
+        foreach (DeviceItem item in target.Device.DeviceItems)
+            if (item.GetService<SoftwareContainer>()?.Software is PlcSoftware plc
+                && (target.Plc is null || plc.Equals(target.Plc)))
+                yield return plc;
+    }
+
+    private static List<PlcItem> Filter(List<PlcItem> all, HashSet<string>? keys) =>
+        keys is null ? all : all.Where(i => keys.Contains(i.Key)).ToList();
 
     // ── Действия ──────────────────────────────────────────────────────────────
 
@@ -268,6 +423,7 @@ internal sealed class MainForm : Form
 
             if (_project is null) { Status("В TIA Portal нет открытых проектов"); return; }
 
+            _compare = new CompareResults();
             Info($"ConnectToOpenAsync: проект '{projectName}'");
             Status($"Проект: {projectName}");
             await RefreshTreeAsync();
@@ -319,6 +475,7 @@ internal sealed class MainForm : Form
             });
             Info($"OpenFileAsync: проект открыт '{projectName}'");
 
+            _compare = new CompareResults();
             Status($"Проект: {projectName ?? Path.GetFileNameWithoutExtension(path)}");
             await RefreshTreeAsync();
         }
@@ -339,108 +496,255 @@ internal sealed class MainForm : Form
         finally { SetBusy(false); }
     }
 
-    private async Task RefreshTreeAsync()
+    /// <summary>
+    /// Перестраивает дерево, не меняя строку состояния. Ошибки только пишутся в лог.
+    /// Запрос во время идущего обновления выполняется сразу после него.
+    /// </summary>
+    private async Task RefreshTreeQuietlyAsync()
     {
         if (_project is null) return;
-        Status("Загрузка дерева...");
+        if (_refreshing) { _refreshPending = true; return; }
 
-        var boldFont = new Font(_tree.Font, FontStyle.Bold);
-        var nodes    = await _sta.RunAsync(() => TreeBuilder.BuildDeviceNodes(_project, boldFont));
-        Info($"RefreshTreeAsync: устройств в дереве: {nodes.Count}");
+        _refreshing = true;
+        try
+        {
+            do
+            {
+                _refreshPending = false;
+                await RefreshTreeAsync(quiet: true);
+            }
+            while (_refreshPending);
+        }
+        catch (Exception ex) { Error("RefreshTreeQuietlyAsync: ошибка", ex); }
+        finally { _refreshing = false; }
+    }
+
+    private async Task RefreshTreeAsync(bool quiet = false)
+    {
+        var project = _project;
+        if (project is null) return;
+        if (!quiet) Status("Загрузка дерева...");
+
+        var boldFont  = new Font(_tree.Font, FontStyle.Bold);
+        var workspace = _workspace.WorkspaceDir;
+        var compare   = _compare;
+        var nodes     = await _sta.RunAsync(() => TreeBuilder.BuildDeviceNodes(project, boldFont, workspace, compare));
+        if (_project != project) return;  // За время построения проект отключили
+        if (!quiet) Info($"RefreshTreeAsync: устройств в дереве: {nodes.Count}");
+
+        // Перестроение не должно сбрасывать раскрытые узлы, выбор и прокрутку
+        var firstLoad = _tree.Nodes.Count == 0;
+        var expanded  = new HashSet<string>(AllNodes(_tree.Nodes).Where(n => n.IsExpanded).Select(NodePath));
+        var selected  = _tree.SelectedNode is { } s ? NodePath(s) : null;
+        var top       = _tree.TopNode is { } t ? NodePath(t) : null;
+        TreeNode? topNode = null;
 
         _tree.BeginUpdate();
         _tree.Nodes.Clear();
-        foreach (var node in nodes) { _tree.Nodes.Add(node); node.Expand(); }
+        foreach (var node in nodes)
+            _tree.Nodes.Add(node);
+
+        foreach (var node in AllNodes(_tree.Nodes).ToList())
+        {
+            var path = NodePath(node);
+            if (expanded.Contains(path) || (firstLoad && node.Parent is null))
+                node.Expand();
+            if (path == selected)
+                _tree.SelectedNode = node;
+            if (path == top)
+                topNode = node;
+        }
         _tree.EndUpdate();
-        Status("Готово");
+
+        if (topNode is not null)
+            _tree.TopNode = topNode;
+
+        UpdateButtons();
+        if (!quiet) Status("Готово");
     }
 
-    private async Task ExportDeviceAsync()
+    private async Task CompareAsync(bool wholeProject)
     {
-        var device = FindSelectedDevice();
-        if (device is null) return;
+        var targets = wholeProject
+            ? ProjectTargets()
+            : SelectionTarget() is { } target ? new List<Target> { target } : new List<Target>();
+        if (targets.Count == 0) return;
 
-        // Читаем имя устройства на потоке StaWorker — COM-объект принадлежит ему
-        var deviceName = await _sta.RunAsync(() => device.Name);
-        Info($"ExportDeviceAsync: устройство '{deviceName}'");
+        var workspace = EnsureWorkspace();
+        if (workspace is null) return;
 
-        // Если рабочая папка не задана — предложить выбрать
-        if (_workspace.WorkspaceDir is null)
-        {
-            var answer = MessageBox.Show(
-                "Рабочая папка (Git-репозиторий) не выбрана.\nВыбрать сейчас?",
-                "Рабочая папка",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Question);
-
-            if (answer == DialogResult.Yes)
-                SelectWorkspace();
-
-            if (_workspace.WorkspaceDir is null) return;
-        }
-
-        var safeName  = string.Concat(deviceName.Split(Path.GetInvalidFileNameChars()));
-        var deviceDir = Path.Combine(_workspace.WorkspaceDir, safeName);
-        var compile   = _itemCompile.Checked;  // Читается здесь: контрол принадлежит UI-потоку
-        var log       = NewProgress();
+        var compile = _itemCompile.Checked;  // Читается здесь: контрол принадлежит UI-потоку
+        var compare = _compare;
+        var log     = NewProgress();
 
         SetBusy(true);
-        Status($"Экспорт {deviceName}...");
+        Status("Сравнение...");
         try
         {
-            Info($"ExportDeviceAsync: папка вывода '{deviceDir}'");
-
-            var warnings = await _sta.RunAsync(() =>
+            var (differences, notCompiled, warnings) = await _sta.RunAsync(() =>
             {
-                var count = 0;
-                foreach (DeviceItem item in device.DeviceItems)
-                    if (item.GetService<SoftwareContainer>()?.Software is PlcSoftware plc)
+                int differences = 0, notCompiled = 0, warnings = 0;
+                foreach (var target in targets)
+                {
+                    var deviceDir = PathNames.DeviceDir(workspace, target.Device.Name);
+                    foreach (var plc in TargetPlcs(target))
                     {
                         if (compile)
-                            count += PlcCompiler.Compile(plc, log);
+                            warnings += PlcCompiler.Compile(plc, log);
 
-                        Info($"ExportDeviceAsync: экспорт PLC '{plc.Name}'");
-                        var export = new ExportService(plc, deviceDir, log);
-                        export.Export();
-                        count += export.WarningCount;
+                        var all      = PlcCatalog.Collect(plc);
+                        var selected = Filter(all, target.Keys);
+                        var result   = compare.GetOrAddPlc(PathNames.PlcDir(deviceDir, plc.Name));
+
+                        warnings    += CompareService.ComparePlc(plc, deviceDir, all, selected, result, log);
+                        differences += selected.Count(i => result.Items.TryGetValue(i.Key, out var status) && status != ItemStatus.Unchanged)
+                                     + result.MissingInTia;
+                        notCompiled += selected.Count(i => result.Items.TryGetValue(i.Key, out var status) && status == ItemStatus.NotCompiled);
                     }
 
-                Info("ExportDeviceAsync: экспорт HW конфигурации");
-                var hwExport = new HwExportService(device, deviceDir, log);
-                hwExport.Export();
-                return count + hwExport.WarningCount;
+                    if (target.IncludeHw)
+                    {
+                        var hwChanged = CompareService.CompareHw(target.Device, deviceDir, log);
+                        compare.SetHwChanged(deviceDir, hwChanged);
+                        if (hwChanged) differences++;
+                    }
+                }
+                return (differences, notCompiled, warnings);
             });
 
-            Info($"ExportDeviceAsync: завершено '{deviceName}', предупреждений: {warnings}");
-            if (warnings == 0)
+            Info($"CompareAsync: отличий {differences}, не скомпилировано {notCompiled}, ошибок {warnings}");
+            Log(differences == 0 ? "Сравнение завершено: отличий нет." : $"Сравнение завершено: отличий {differences}.");
+            if (notCompiled > 0)
+                Log($"Не скомпилировано: {notCompiled}. Их содержимое недоступно до компиляции, " +
+                    "скомпилируйте ПЛК в TIA или включите «Инструменты → Компилировать перед экспортом и сравнением».");
+
+            var summary = differences == 0 ? "Отличий нет" : $"Отличий: {differences}";
+            if (notCompiled > 0) summary += $", не скомпилировано: {notCompiled}";
+            if (warnings > 0)    summary += $", ошибок: {warnings}";
+            Status(summary);
+        }
+        catch (Exception ex)
+        {
+            Error("CompareAsync: ошибка", ex);
+            Log($"Ошибка: {ex.Message}");
+            Status("Ошибка сравнения");
+        }
+        finally { SetBusy(false); }
+
+        await RefreshTreeQuietlyAsync();
+    }
+
+    private async Task ExportAsync(ExportMode mode)
+    {
+        List<Target> targets;
+        switch (mode)
+        {
+            case ExportMode.Differences:
+                targets = ProjectTargets();
+                break;
+            case ExportMode.Device:
+                var device = FindAncestorTag<Device>(_tree.SelectedNode);
+                targets = device is null ? new List<Target>() : new List<Target> { new(device, null, null, includeHw: true) };
+                break;
+            default:
+                targets = SelectionTarget() is { } target ? new List<Target> { target } : new List<Target>();
+                break;
+        }
+        if (targets.Count == 0) return;
+
+        var workspace = EnsureWorkspace();
+        if (workspace is null) return;
+
+        var compile = _itemCompile.Checked;  // Читается здесь: контрол принадлежит UI-потоку
+        var compare = _compare;
+        var log     = NewProgress();
+
+        Info($"ExportAsync: режим {mode}, папка '{workspace}'");
+        SetBusy(true);
+        Status("Экспорт...");
+        try
+        {
+            var (exported, warnings, compared) = await _sta.RunAsync(() =>
             {
-                Status($"Готово: {deviceName}");
-                Log($"Экспортировано в: {deviceDir}");
+                int exported = 0, warnings = 0;
+                var compared = false;
+                foreach (var target in targets)
+                {
+                    var deviceDir = PathNames.DeviceDir(workspace, target.Device.Name);
+                    foreach (var plc in TargetPlcs(target))
+                    {
+                        var plcDir     = PathNames.PlcDir(deviceDir, plc.Name);
+                        var comparison = compare.ForPlc(plcDir);
+                        if (mode == ExportMode.Differences && comparison is null)
+                            continue;  // ПЛК не сравнивался
+                        compared |= comparison is not null;
+
+                        var all      = PlcCatalog.Collect(plc);
+                        var selected = mode == ExportMode.Differences
+                            ? all.Where(i => comparison!.Items.TryGetValue(i.Key, out var status)
+                                             && status is ItemStatus.Changed or ItemStatus.New).ToList()
+                            : Filter(all, target.Keys);
+
+                        if (mode == ExportMode.Differences && selected.Count == 0 && comparison!.MissingInTia == 0)
+                            continue;
+
+                        if (compile)
+                            warnings += PlcCompiler.Compile(plc, log);
+
+                        Info($"ExportAsync: PLC '{plc.Name}', элементов {selected.Count} из {all.Count}");
+                        var export = new ExportService(plc, deviceDir, log);
+                        export.Export(all, selected);
+                        warnings += export.WarningCount;
+                        exported += selected.Count - export.FailedKeys.Count;
+
+                        // Выгруженное теперь совпадает с рабочей папкой, а файлы удалённых элементов убраны
+                        var result = compare.GetOrAddPlc(plcDir);
+                        foreach (var item in selected.Where(i => !export.FailedKeys.Contains(i.Key)))
+                            result.Items[item.Key] = ItemStatus.Unchanged;
+                        result.MissingInTia = 0;
+                    }
+
+                    var exportHw = mode == ExportMode.Differences
+                        ? compare.HwChanged(deviceDir) == true
+                        : target.IncludeHw;
+                    if (exportHw)
+                    {
+                        Info("ExportAsync: экспорт HW конфигурации");
+                        var hwExport = new HwExportService(target.Device, deviceDir, log);
+                        hwExport.Export();
+                        warnings += hwExport.WarningCount;
+                        compare.SetHwChanged(deviceDir, false);
+                    }
+                }
+                return (exported, warnings, compared);
+            });
+
+            Info($"ExportAsync: завершено, элементов {exported}, предупреждений {warnings}");
+            if (mode == ExportMode.Differences && !compared)
+            {
+                Log("Нет результатов сравнения. Сначала выполните «Сравнить».");
+                Status("Нет результатов сравнения");
+            }
+            else if (warnings == 0)
+            {
+                Log($"Экспортировано элементов: {exported}. Папка: {workspace}");
+                Status($"Готово: элементов {exported}");
             }
             else
             {
-                Status($"Готово с предупреждениями ({warnings}): {deviceName}");
-                Log($"Экспортировано в: {deviceDir}. Есть ошибки ({warnings}), проверьте строки WARN.");
+                Log($"Экспортировано элементов: {exported}. Есть ошибки ({warnings}), проверьте строки WARN.");
+                Status($"Готово с предупреждениями ({warnings})");
             }
         }
         catch (Exception ex)
         {
-            Error("ExportDeviceAsync: ошибка", ex);
+            Error("ExportAsync: ошибка", ex);
             Log($"Ошибка: {ex.Message}");
             Status("Ошибка экспорта");
         }
         finally { SetBusy(false); }
-    }
 
-    private Device? FindSelectedDevice()
-    {
-        var node = _tree.SelectedNode;
-        while (node is not null)
-        {
-            if (node.Tag is Device d) return d;
-            node = node.Parent;
-        }
-        return null;
+        await RefreshTreeQuietlyAsync();
     }
 
     private void Disconnect()
@@ -449,6 +753,7 @@ internal sealed class MainForm : Form
         _session = null;
         _ = _sta.RunAsync(() => s?.Dispose());
         _project = null;
+        _compare = new CompareResults();
         _tree.Nodes.Clear();
         Log("Отключено от TIA Portal.");
         Status("Нет подключения");
