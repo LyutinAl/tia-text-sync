@@ -57,6 +57,14 @@ internal static class ArchiveService
         }
     }
 
+    /// <summary>
+    /// TIA Portal отказал в архивировании, потому что в проекте есть несохранённые изменения.
+    /// В API нет признака несохранённых изменений, поэтому причина определяется по тексту ошибки.
+    /// </summary>
+    public static bool IsUnsavedChangesError(Exception ex) =>
+        ex is EngineeringTargetInvocationException
+        && ex.Message.IndexOf("unsaved changes", StringComparison.OrdinalIgnoreCase) >= 0;
+
     /// <summary>Расширение архива по расширению файла проекта: .ap21 → .zap21, .ap15_1 → .zap15_1.</summary>
     private static string ArchiveExtension(Project project)
     {

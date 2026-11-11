@@ -808,7 +808,10 @@ internal sealed class MainForm : Form
         finally { SetBusy(false); }
     }
 
-    /// <summary>Сохраняет архив проекта в рабочую папку. Ошибку пишет в лог и возвращает false.</summary>
+    /// <summary>
+    /// Сохраняет архив проекта в рабочую папку. Если TIA отказывает из-за несохранённых изменений,
+    /// предлагает сохранить проект и повторить. Ошибку пишет в лог и возвращает false.
+    /// </summary>
     private async Task<bool> ArchiveCoreAsync(string workspace, IProgress<string> log)
     {
         var project = _project;
@@ -817,17 +820,58 @@ internal sealed class MainForm : Form
         Status("Архивирование проекта...");
         try
         {
-            var path = await _sta.RunAsync(() => ArchiveService.Archive(project, workspace, log));
-            Info($"ArchiveCoreAsync: архив '{path}'");
+            await ArchiveOnStaAsync(project, workspace, log, saveFirst: false);
             return true;
+        }
+        catch (Exception ex) when (ArchiveService.IsUnsavedChangesError(ex))
+        {
+            Info("ArchiveCoreAsync: в проекте есть несохранённые изменения");
+            var answer = MessageBox.Show(this,
+                "В проекте TIA Portal есть несохранённые изменения, а архив создаётся только из сохранённого проекта.\n\n" +
+                "Сохранить проект в TIA Portal и создать архив?",
+                "Архив проекта", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (answer != DialogResult.Yes)
+            {
+                Log("Архив проекта не сохранён: в проекте есть несохранённые изменения.");
+                return false;
+            }
+
+            try
+            {
+                await ArchiveOnStaAsync(project, workspace, log, saveFirst: true);
+                return true;
+            }
+            catch (Exception retryEx)
+            {
+                ReportArchiveError(retryEx);
+                return false;
+            }
         }
         catch (Exception ex)
         {
-            Error("ArchiveCoreAsync: ошибка", ex);
-            Log($"Архив проекта не сохранён: {ex.Message}");
-            Log("Если в TIA есть несохранённые изменения, сохраните проект и повторите.");
+            ReportArchiveError(ex);
             return false;
         }
+    }
+
+    private async Task ArchiveOnStaAsync(Project project, string workspace, IProgress<string> log, bool saveFirst)
+    {
+        var path = await _sta.RunAsync(() =>
+        {
+            if (saveFirst)
+            {
+                log.Report("Сохранение проекта в TIA Portal");
+                project.Save();
+            }
+            return ArchiveService.Archive(project, workspace, log);
+        });
+        Info($"ArchiveCoreAsync: архив '{path}'{(saveFirst ? ", проект сохранён перед архивированием" : "")}");
+    }
+
+    private void ReportArchiveError(Exception ex)
+    {
+        Error("ArchiveCoreAsync: ошибка", ex);
+        Log($"Архив проекта не сохранён: {ex.Message}");
     }
 
     private async Task ImportAsync(Scope scope)
