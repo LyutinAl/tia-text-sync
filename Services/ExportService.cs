@@ -126,10 +126,12 @@ internal sealed class ExportService
         {
             // IGenerateSource реализован самим PlcBlock, поэтому проверять нужно язык блока.
             var language = block.ProgrammingLanguage;
-            if (language is ProgrammingLanguage.SCL or ProgrammingLanguage.STL or ProgrammingLanguage.DB)
-                ExportBlockAsSource(block, language, dir);
-            else
+            if (language is not (ProgrammingLanguage.SCL or ProgrammingLanguage.STL or ProgrammingLanguage.DB))
                 ExportBlockAsXml(block, dir);
+            else if (block.IsKnowHowProtected)
+                Skip(block.Name, "блок защищён, TIA Portal не выдаёт его исходник");
+            else
+                ExportBlockAsSource(block, language, dir);
         }
         catch (Exception ex)
         {
@@ -344,6 +346,14 @@ internal sealed class ExportService
         {
             Logger.Warn($"ExportService: не удалось удалить временную папку '{_tempDir}': {ex.Message}");
         }
+    }
+
+    // Ожидаемый пропуск: не считается ошибкой, а прошлый файл элемента сохраняется
+    private void Skip(string name, string reason)
+    {
+        _failedNames.Add(SafeName(name));
+        _progress.Report($"  SKIP {name}: {reason}");
+        Logger.Warn($"ExportService: пропущен '{_plc.Name}/{name}': {reason}");
     }
 
     private void Warn(string name, Exception ex)

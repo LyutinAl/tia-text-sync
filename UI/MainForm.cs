@@ -32,10 +32,12 @@ internal sealed class MainForm : Form
     private readonly ToolStripStatusLabel _workspaceLabel;
 
     private readonly ToolStripDropDownButton _btnOpen;
-    private readonly ToolStripButton         _btnRefresh;
     private readonly ToolStripButton         _btnWorkspace;
     private readonly ToolStripButton         _btnExport;
     private readonly ToolStripButton         _btnImport;
+    private readonly ToolStripDropDownButton _btnTools;
+    private readonly ToolStripMenuItem       _itemRefresh;
+    private readonly ToolStripMenuItem       _itemCompile;
     private readonly ToolStripButton         _btnDisconnect;
 
     public MainForm()
@@ -60,8 +62,6 @@ internal sealed class MainForm : Form
         _btnOpen = new ToolStripDropDownButton("TIA Portal")
             { DropDownItems = { itemConnect, itemOpenFile } };
 
-        _btnRefresh = new ToolStripButton("Обновить") { Enabled = false };
-
         _btnWorkspace = new ToolStripButton("Рабочая папка...");
 
         _btnExport = new ToolStripButton("Экспорт")
@@ -76,6 +76,18 @@ internal sealed class MainForm : Form
             ToolTipText = "Импортировать изменения из рабочей папки в TIA (в разработке)"
         };
 
+        _itemRefresh = new ToolStripMenuItem("Обновить дерево") { Enabled = false };
+
+        _itemCompile = new ToolStripMenuItem("Компилировать при экспорте")
+        {
+            CheckOnClick = true,
+            ToolTipText  = "Перед экспортом скомпилировать программу ПЛК. Изменяет состояние проекта в TIA"
+        };
+
+        _btnTools = new ToolStripDropDownButton("Инструменты")
+            { DropDownItems = { _itemRefresh, _itemCompile } };
+        _btnTools.DropDown.ShowItemToolTips = true;
+
         _btnDisconnect = new ToolStripButton("Отключить") { Enabled = false };
 
         _toolbar = new ToolStrip
@@ -83,12 +95,13 @@ internal sealed class MainForm : Form
             Items =
             {
                 _btnOpen,
-                _btnRefresh,
                 new ToolStripSeparator(),
                 _btnWorkspace,
                 new ToolStripSeparator(),
                 _btnExport,
                 _btnImport,
+                new ToolStripSeparator(),
+                _btnTools,
                 new ToolStripSeparator(),
                 _btnDisconnect
             }
@@ -130,7 +143,7 @@ internal sealed class MainForm : Form
         itemConnect.Click  += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await ConnectToOpenAsync(); });
         itemOpenFile.Click += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await OpenFileAsync(); });
 
-        _btnRefresh.Click    += async (_, _) => await RefreshAsync();
+        _itemRefresh.Click   += (_, _) => BeginInvoke(async () => { await Task.Delay(0); await RefreshAsync(); });
         _btnWorkspace.Click  += (_, _) => SelectWorkspace();
         _btnExport.Click     += async (_, _) => await ExportDeviceAsync();
         _btnImport.Click     += (_, _) => MessageBox.Show(
@@ -219,7 +232,8 @@ internal sealed class MainForm : Form
     {
         var hasDevice  = FindSelectedDevice() is not null;
         _btnOpen.Enabled       = !_isBusy;
-        _btnRefresh.Enabled    = !_isBusy && _project is not null;
+        _btnTools.Enabled      = !_isBusy;
+        _itemRefresh.Enabled   = _project is not null;
         _btnWorkspace.Enabled  = !_isBusy;
         _btnExport.Enabled     = !_isBusy && _project is not null && hasDevice;
         _btnDisconnect.Enabled = !_isBusy && _session is not null;
@@ -367,6 +381,7 @@ internal sealed class MainForm : Form
 
         var safeName  = string.Concat(deviceName.Split(Path.GetInvalidFileNameChars()));
         var deviceDir = Path.Combine(_workspace.WorkspaceDir, safeName);
+        var compile   = _itemCompile.Checked;  // Читается здесь: контрол принадлежит UI-потоку
         var log       = NewProgress();
 
         SetBusy(true);
@@ -381,6 +396,9 @@ internal sealed class MainForm : Form
                 foreach (DeviceItem item in device.DeviceItems)
                     if (item.GetService<SoftwareContainer>()?.Software is PlcSoftware plc)
                     {
+                        if (compile)
+                            count += PlcCompiler.Compile(plc, log);
+
                         Info($"ExportDeviceAsync: экспорт PLC '{plc.Name}'");
                         var export = new ExportService(plc, deviceDir, log);
                         export.Export();
