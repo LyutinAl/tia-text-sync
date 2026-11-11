@@ -12,12 +12,15 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Reference Include="Siemens.Engineering">
-      <HintPath>.\libs\V17\Siemens.Engineering.dll</HintPath>
+    <!-- Private=False: сборки загружаются из установки TIA Portal (см. Core/OpennessResolver.cs) -->
+    <Reference Include="Siemens.Engineering.Base">
+      <HintPath>.\libs\V21\net48\Siemens.Engineering.Base.dll</HintPath>
+      <Private>False</Private>
     </Reference>
 
-    <Reference Include="Siemens.Engineering.Hmi">
-      <HintPath>.\libs\V17\Siemens.Engineering.Hmi.dll</HintPath>
+    <Reference Include="Siemens.Engineering.Step7">
+      <HintPath>.\libs\V21\net48\Siemens.Engineering.Step7.dll</HintPath>
+      <Private>False</Private>
     </Reference>
   </ItemGroup>
 

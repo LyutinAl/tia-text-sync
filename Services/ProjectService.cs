@@ -35,10 +35,39 @@ internal sealed class ProjectService
     public Project OpenProject(string projectPath, IProgress<string>? log = null) =>
         FindOpenProject(projectPath, log) ?? _tia.Projects.Open(new FileInfo(projectPath));
 
+    /// <summary>
+    /// Возвращает все устройства проекта: с верхнего уровня, из папок (на любой глубине)
+    /// и из системной группы несгруппированных устройств.
+    /// </summary>
+    public static IReadOnlyList<Device> GetAllDevices(Project project)
+    {
+        var devices = new List<Device>();
+
+        foreach (Device device in project.Devices)
+            devices.Add(device);
+
+        foreach (DeviceUserGroup group in project.DeviceGroups)
+            AddGroupDevices(group, devices);
+
+        foreach (Device device in project.UngroupedDevicesGroup.Devices)
+            devices.Add(device);
+
+        return devices.Distinct().ToList();
+    }
+
+    private static void AddGroupDevices(DeviceUserGroup group, List<Device> devices)
+    {
+        foreach (Device device in group.Devices)
+            devices.Add(device);
+
+        foreach (DeviceUserGroup sub in group.Groups)
+            AddGroupDevices(sub, devices);
+    }
+
     /// <summary>Возвращает все объекты ПО ПЛК по всем устройствам проекта.</summary>
     public static IEnumerable<PlcSoftware> GetAllPlc(Project project)
     {
-        foreach (Device device in project.Devices)
+        foreach (var device in GetAllDevices(project))
             foreach (DeviceItem item in device.DeviceItems)
                 if (item.GetService<SoftwareContainer>()?.Software is PlcSoftware plc)
                     yield return plc;
@@ -47,7 +76,7 @@ internal sealed class ProjectService
     /// <summary>Возвращает пары (устройство, список ПЛК) для всех устройств. Используется при экспорте.</summary>
     public static IEnumerable<(Device Device, IReadOnlyList<PlcSoftware> Plcs)> GetDeviceGroups(Project project)
     {
-        foreach (Device device in project.Devices)
+        foreach (var device in GetAllDevices(project))
         {
             var plcs = new List<PlcSoftware>();
             foreach (DeviceItem item in device.DeviceItems)

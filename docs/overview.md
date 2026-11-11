@@ -20,12 +20,13 @@
 | ---- | -------- | ------ |
 | 1 | Запуск TIA Portal / подключение к работающему процессу | ✅ Done |
 | 2 | Открытие проекта, отображение дерева устройств и блоков | ✅ Done |
-| 3 | Экспорт блоков: SCL/AWL → `src/`, LAD/FBD → `xml/`, теги → `tags/` | ✅ Done |
+| 3 | Экспорт по дереву проекта: блоки → `blocks/`, теги → `tags/`, UDT → `types/` | ✅ Done |
 | 4 | Нормализация XML (удаление нестабильных полей, стабильный diff) | ✅ Done |
 | 5 | Экспорт HW-конфигурации устройств → `hw.xml` | ✅ Done |
 | 6 | WinForms GUI: подключение, дерево проекта, выбор рабочей папки, экспорт | ✅ Done |
-| 7 | Импорт: `src/` → `GenerateBlocksFromSource`, `xml/` → `ImportBlock`, `tags/` → `ImportTagTable` | 📋 Planned |
-| 8 | Сравнение изменений между рабочей папкой и TIA Portal | 📋 Planned |
+| 7 | Импорт: исходники → `GenerateBlocksFromSource`, XML-блоки → `PlcBlockComposition.Import`, `tags/` → `PlcTagTableComposition.Import` | ✅ Done |
+| 8 | Сравнение TIA Portal с рабочей папкой по содержимому: отметки в дереве, экспорт только отличий или выбранного | ✅ Done |
+| 9 | Изменения в рабочей папке (из Git) относительно TIA Portal | 📋 Planned |
 
 ## Рабочая папка (workspace)
 
@@ -39,23 +40,30 @@
 
 ```text
 <workspace>/                    ← корень Git-репозитория
+  <Project>.zap21               ← архив проекта для Git LFS (по желанию)
   <DeviceName>/                 ← устройство (символы "/" в имени заменяются)
     hw.xml                      ← снимок HW-конфигурации (только для git diff)
     <PlcName>/
-      src/                      ← блоки и UDT с ST-исходником — полный round-trip
-        Motor_FB.scl
-        Motor_DB.scl
-        MotorType.scl
-        Conveyor.awl            ← STL-блоки экспортируются как .awl
-      tags/                     ← таблицы тегов в CSV — полный round-trip
-        Main_Tags.csv
-      xml/                      ← LAD/FBD блоки без ST-представления — round-trip через XML
-        Conveyor_LAD.xml
+      blocks/                   ← блоки, подпапки повторяют группы проекта TIA
+        Main.scl                ← SCL
+        Motors/
+          Motor_FB.scl
+          Motor_DB.db           ← DB
+          Conveyor.awl          ← STL
+          Conveyor_LAD.xml      ← LAD, FBD, GRAPH, F-блоки
+          Conveyor_LAD.lad      ← текстовый вид LAD/FBD для чтения и diff, не импортируется
+      tags/                     ← таблицы тегов в SimaticML XML, с группами проекта
+        Main_Tags.xml
+      types/                    ← UDT, с группами проекта
+        MotorType.udt
+      tech/                     ← технологические объекты в SimaticML XML, с группами проекта
+        Axis_1.xml
+        PID_Compact_1.db        ← исходник DB, если TIA не поддерживает XML для объекта
 ```
 
 ## Round-trip
 
-Обратная запись изменений в TIA Portal поддерживается для `src/`, `tags/`, `xml/`:
+Обратная запись изменений в TIA Portal планируется для `blocks/`, `tags/`, `types/`:
 
 ```text
 Изменения в Git → tia-text-sync import → TIA Portal
@@ -67,7 +75,7 @@
 
 - Работает только на машине с установленным TIA Portal (Windows, x64)
 - Требует членства пользователя в группе `Siemens TIA Openness`
-- Использует API версии V17 (совместимо с TIA Portal V17 и выше)
+- Использует API версии V21 и работает только с TIA Portal V21, установленным в папку по умолчанию
 - HW-конфигурация экспортируется для diff, но автоматический импорт не поддерживается
 
 ## Что НЕ входит в scope (сейчас)

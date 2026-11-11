@@ -14,6 +14,8 @@ internal static class XmlNormalizer
 {
     private static readonly HashSet<string> ElementsToRemove = new(StringComparer.OrdinalIgnoreCase)
     {
+        "Created",              // DocumentInfo: время создания файла экспорта
+        "InstalledProducts",    // DocumentInfo: состав и версии продуктов на машине, различаются у разработчиков
         "ModifiedDate",
         "CreationDate",
         "CompileDate",

@@ -3,6 +3,8 @@
 **Статус:** Принято
 **Дата:** 2026-03-09
 
+> **Обновление 2026-11-11:** импорт реализован в GUI, а не через CLI, описанный ниже. Кнопка «Импорт» загружает выбранную ветвь дерева, отличия по последнему сравнению или устройство целиком, после загрузки элементы сравниваются с рабочей папкой. Устройства лежат в `<Устройство>/`, HW-снимок в `<Устройство>/hw.xml`, а не в `hw/`. Подробности в `docs/architecture.md`, раздел ImportService.
+
 ## Контекст
 
 Элементы TIA-проекта делятся на две категории с точки зрения Openness API:
@@ -25,8 +27,8 @@ Round-trip делится на два класса элементов:
 
 | Класс | Элементы | Экспорт | Импорт |
 | ----- | -------- | ------- | ------ |
-| **Код** | FB, FC, OB (SCL), DB, UDT | `src/*.scl` | `GenerateBlocksFromSource` ✅ |
-| **Структура** | LAD/FBD/AWL блоки, Tag Tables | `xml/*.xml`, `tags/*.csv` | `ImportBlock`, `ImportTagTable` ✅ |
+| **Код** | FB, FC, OB (SCL, STL), DB, UDT | `blocks/**/*.scl`, `*.awl`, `*.db`, `types/**/*.udt` | `GenerateBlocksFromSource` ✅ |
+| **Структура** | LAD/FBD блоки, Tag Tables | `blocks/**/*.xml`, `tags/**/*.xml` | `PlcBlockComposition.Import`, `PlcTagTableComposition.Import` ✅ |
 | **Конфигурация** | HW Config, Profinet, IP, сеть | `hw/*.xml` | только вручную через TIA GUI ⚠️ |
 
 ## Workflow
@@ -45,7 +47,7 @@ tia-text-sync --project MyPLC.ap17 --output ./repo
 tia-text-sync --project MyPLC.ap17 --input ./repo
 ```
 
-Импортирует только `src/`, `xml/` (блоки), `tags/`. Папка `hw/` **игнорируется** при импорте — изменения в ней требуют ручного вмешательства.
+Импортирует только `blocks/`, `tags/`, `types/`, подпапки задают группу элемента в проекте. Папка `blocks/System blocks/` пропускается: её блоки создаёт сам TIA Portal. Папка `hw/` **игнорируется** при импорте — изменения в ней требуют ручного вмешательства.
 
 ### Структура репозитория
 
@@ -56,9 +58,9 @@ repo/
     CPU_1516.xml
     ET200SP_left.xml
   <PlcName>/             # По одному каталогу на каждый ПЛК в проекте
-    src/                 # SCL-источник: блоки SCL, DB, UDT — полный round-trip
-    tags/                # Tag Tables CSV — полный round-trip
-    xml/                 # LAD/FBD блоки — полный round-trip
+    blocks/              # Блоки, подпапки повторяют группы проекта — полный round-trip
+    tags/                # Tag Tables SimaticML XML, с группами — полный round-trip
+    types/               # UDT, с группами — полный round-trip
 ```
 
 ## Обоснование
